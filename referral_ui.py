@@ -5,36 +5,28 @@ import os
 import pandas as pd
 from datetime import datetime
 
-# Load users
 def load_users():
     if os.path.exists("users.json"):
         with open("users.json", "r") as file:
             return json.load(file)
     return {}
 
-# Save users
 def save_users(users):
     with open("users.json", "w") as file:
         json.dump(users, file, indent=4)
 
-# Generate referral code
 def generate_referral_code():
     return str(uuid.uuid4())[:8]
 
-# Count referrals
 def get_referral_count(users, code):
     return sum(1 for u in users.values() if u.get("referred_by") == code)
 
-# Streamlit UI
 st.title("🚀 TrustMe AI Referral Signup")
 
 users = load_users()
-
-# Get ?ref= code from URL
 query_params = st.query_params
 referred_by = query_params.get("ref", [None])[0]
 
-# Registration form
 with st.form("registration_form"):
     name = st.text_input("👤 Your Name")
     email = st.text_input("📧 Your Email")
@@ -57,15 +49,12 @@ if submitted:
         st.session_state["registered"] = True
         st.session_state["user_email"] = email
 
-# Show referral info
 if st.session_state.get("registered"):
     email = st.session_state["user_email"]
     user = users.get(email)
-
     if user:
         st.markdown("---")
         st.subheader("🎁 Your Referral Dashboard")
-
         referral_code = user["referral_code"]
         referral_link = f"https://trustmeai.online/?ref={referral_code}"
         referral_count = get_referral_count(users, referral_code)
@@ -76,10 +65,7 @@ if st.session_state.get("registered"):
         st.write(f"👥 **People You've Referred:** `{referral_count}`")
 
         referred_users = [
-            {
-                "Name": u["name"],
-                "Email": u["email"]
-            }
+            {"Name": u["name"], "Email": u["email"]}
             for u in users.values()
             if u.get("referred_by") == referral_code
         ]
