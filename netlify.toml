@@ -1,0 +1,4 @@
+[[redirects]]
+  from = "/*"
+  to = "https://trustmeai-pghbcmqgokykykay4x9brik.streamlit.app"
+  status = 200
