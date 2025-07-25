@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from bot.strategy import run_redhawk_strategy
-from utils.config import config
+from config import config
 from utils.logger import setup_logger
 from backtest import run_csv_backtest
 

@@ -1,44 +1,69 @@
-from utils.logger import setup_logger
-from bot.strategy import run_redhawk_strategy
-from utils.config import config, telegram_settings
-from utils.telegram_alert import send_telegram_message
+import streamlit as st
+import json
+from config import config
+from referral_ui import load_users, get_referral_count
 
-def main():
-    logger = setup_logger()
+# Load users
+users = load_users()
 
-    try:
-        history, trade_log, summary = run_redhawk_strategy(config, logger)
+# Simulate user login (from session or fallback)
+email = st.session_state.get("user_email", None)
 
-        # Safe fetch values
-        balance = summary.get("Final Balance") or summary.get("final_balance", 0)
-        days = summary.get("Total Days") or summary.get("total_days", 0)
-        trades = summary.get("Total Trades") or summary.get("total_trades", 0)
+st.set_page_config(page_title="TrustMe AI Dashboard", layout="centered")
+st.title("📊 TrustMe AI Dashboard")
 
+if not email or email not in users:
+    st.warning("⚠️ Please register or login via referral page first.")
+    st.stop()
 
-        # Prepare alert message
-        msg = (
-            f"✅ RedHawk Simulation Complete!\n\n"
-            f"💰 Final Balance: ${balance:,.2f}\n"
-            f"📆 Days: {days}\n"
-            f"🔁 Trades: {trades}\n"
-            f"💼 Mode: {config.get('mode', 'N/A').capitalize()}"
+# Get current user
+user = users[email]
+name = user["name"]
+referral_code = user["referral_code"]
+referral_count = get_referral_count(users, referral_code)
+referral_link = f"https://trustmeai.online/?ref={referral_code}"
+referral_reward = referral_count * 5
 
-        )
+# ------------------- Investment Panel -------------------
+st.subheader("💼 Investment Overview")
 
-        success = send_telegram_message(
-            telegram_settings["bot_token"],
-            telegram_settings["chat_id"],
-            msg
-        )
+st.write("👤 Name:", name)
+st.write("📧 Email:", email)
+st.write("💰 Initial Investment:", f"${config['initial_investment']}")
+st.write("📈 Daily Profit %:", f"{config['daily_profit_percent']}%")
+st.write("📅 Duration:", f"{config['days']} days")
+st.write("🔁 Mode:", config["mode"].capitalize())
 
-        if success:
-            print("Telegram alert sent successfully!")
-        else:
-            print("Failed to send Telegram message.")
+# Placeholder for profit calculation (you can enhance later)
+estimated_profit = config['initial_investment']
+for day in range(config["days"]):
+    profit_today = estimated_profit * (config["daily_profit_percent"] / 100)
+    if config["mode"] == "reinvest":
+        estimated_profit += profit_today
+    else:
+        pass  # withdraw mode can skip reinvest logic
 
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        print(f"ERROR: {e}")
+st.write("💵 Estimated Final Profit:", f"${int(estimated_profit):,}")
 
-if __name__ == "__main__":
-    main()
+# ------------------- Referral Panel -------------------
+st.markdown("---")
+st.subheader("🎁 Your Referral Stats")
+
+st.write("🔗 **Referral Link:**")
+st.code(referral_link)
+
+st.write(f"👥 **People You've Referred:** `{referral_count}`")
+st.write(f"💰 **Total Earned from Referrals:** `${referral_reward}`")
+
+# Table of referred users
+referred_users = [
+    {"Name": u["name"], "Email": u["email"]}
+    for u in users.values()
+    if u.get("referred_by") == referral_code
+]
+
+if referred_users:
+    st.markdown("### 🧾 People You've Referred")
+    st.dataframe(referred_users, use_container_width=True)
+else:
+    st.info("No referrals yet. Share your link to start earning!")
