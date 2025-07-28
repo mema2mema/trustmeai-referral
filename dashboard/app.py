@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # === Internal imports ===
-from bot.strategy import run_redhawk_strategy
+from strategy import run_redhawk_strategy
 from config import config
 from utils.logger import setup_logger
 from backtest import run_csv_backtest
