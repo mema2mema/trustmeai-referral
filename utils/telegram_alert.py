@@ -1,15 +1,23 @@
 import requests
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+import json
+
+def load_config(config_file='telegram_config.json'):
+    with open(config_file, 'r') as file:
+        return json.load(file)
 
 def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    config = load_config()
+    bot_token = config["bot_token"]
+    chat_id = config["chat_id"]
+
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
+        "chat_id": chat_id,
         "text": message,
         "parse_mode": "HTML"
     }
+
     try:
-        response = requests.post(url, data=payload)
-        response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        print("❌ Telegram message failed:", e)
+        requests.post(url, data=payload)
+    except Exception as e:
+        print("❌ Telegram error:", e)
