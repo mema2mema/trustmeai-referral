@@ -3,16 +3,26 @@ import requests
 
 def load_telegram_config(config_file='telegram_config.json'):
     with open(config_file, 'r') as file:
-        config = json.load(file)
-    return config['bot_token'], config['chat_id']
+        return json.load(file)
 
-def send_telegram_message(message, config_file='telegram_config.json'):
-    bot_token, chat_id = load_telegram_config(config_file)
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+def send_telegram_message(message):
+    config = load_telegram_config()
+    url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
     payload = {
-        "chat_id": chat_id,
+        "chat_id": config['chat_id'],
         "text": message,
         "parse_mode": "Markdown"
     }
-    response = requests.post(url, data=payload)
-    return response.ok
+    requests.post(url, data=payload)
+
+def send_telegram_image(image_path):
+    config = load_telegram_config()
+    url = f"https://api.telegram.org/bot{config['bot_token']}/sendPhoto"
+    with open(image_path, 'rb') as img:
+        requests.post(url, data={'chat_id': config['chat_id']}, files={'photo': img})
+
+def send_telegram_file(file_path):
+    config = load_telegram_config()
+    url = f"https://api.telegram.org/bot{config['bot_token']}/sendDocument"
+    with open(file_path, 'rb') as doc:
+        requests.post(url, data={'chat_id': config['chat_id']}, files={'document': doc})

@@ -10,57 +10,63 @@ def send_message(bot_token, chat_id, text):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     requests.post(url, data={'chat_id': chat_id, 'text': text})
 
-def send_file(bot_token, chat_id, file_path):
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-    with open(file_path, 'rb') as f:
-        requests.post(url, data={'chat_id': chat_id}, files={'document': f})
-
-def send_image(bot_token, chat_id, image_path):
-    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-    with open(image_path, 'rb') as img:
-        requests.post(url, data={'chat_id': chat_id}, files={'photo': img})
+def get_updates(bot_token, offset=None):
+    url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
+    if offset:
+        url += f"?offset={offset}"
+    return requests.get(url).json()
 
 def listen_for_commands():
     config = load_config()
     bot_token = config['bot_token']
     chat_id = config['chat_id']
-
-    url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
     last_update_id = None
 
-    print("🤖 Bot listening for commands...")
+    print("🤖 Bot is listening for commands...")
 
     while True:
-        response = requests.get(url).json()
-        if "result" in response:
-            for update in response["result"]:
-                update_id = update["update_id"]
-                message = update.get("message", {}).get("text", "")
+        updates = get_updates(bot_token, offset=last_update_id)
+        for update in updates.get("result", []):
+            message = update.get("message", {})
+            text = message.get("text", "")
+            update_id = update["update_id"]
 
-                if last_update_id is None or update_id > last_update_id:
-                    last_update_id = update_id
+            if update_id != last_update_id:
+                print(f"[COMMAND RECEIVED] {text}")
 
-                    if message == "/summary":
-                        send_message(bot_token, chat_id, "📊 Sending latest backtest summary...")
+                if text == "/summary":
+                    try:
                         with open("summary.txt", "r") as file:
                             send_message(bot_token, chat_id, file.read())
+                    except:
+                        send_message(bot_token, chat_id, "❌ summary.txt not found.")
 
-                    elif message == "/log":
-                        send_message(bot_token, chat_id, "📄 Sending trade log file...")
-                        send_file(bot_token, chat_id, "trade_log.csv")
+                elif text == "/log":
+                    try:
+                        url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
+                        with open("trade_log.csv", "rb") as f:
+                            requests.post(url, data={'chat_id': chat_id}, files={'document': f})
+                    except:
+                        send_message(bot_token, chat_id, "❌ trade_log.csv not found.")
 
-                    elif message == "/graph":
-                        send_message(bot_token, chat_id, "📈 Sending profit chart...")
-                        send_image(bot_token, chat_id, "profit_curve.png")
+                elif text == "/graph":
+                    try:
+                        url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+                        with open("profit_curve.png", "rb") as img:
+                            requests.post(url, data={'chat_id': chat_id}, files={'photo': img})
+                    except:
+                        send_message(bot_token, chat_id, "❌ profit_curve.png not found.")
 
-                    elif message == "/help":
-                        send_message(bot_token, chat_id, """
-🧠 *TrustMe AI Bot Commands*
-/summary - Show backtest summary
-/log - Download trade log CSV
-/graph - Show profit chart
-/help - Show command list
+                elif text == "/help":
+                    send_message(bot_token, chat_id, """
+📟 *TrustMe AI Bot Commands*
+/summary - View last backtest summary
+/log - Download trade log
+/graph - View profit chart
+/help - Show this menu
 """)
+
+                last_update_id = update_id + 1
 
         time.sleep(2)
 

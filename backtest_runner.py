@@ -1,47 +1,21 @@
 import csv
-from alert_utils import send_telegram_message
+import time
+import matplotlib.pyplot as plt
 from datetime import datetime
 from collections import defaultdict
-import matplotlib.pyplot as plt
-import requests
-import json
-import time
-
-def send_telegram_image(image_path, config_file='telegram_config.json'):
-    with open(config_file, 'r') as file:
-        config = json.load(file)
-    bot_token = config['bot_token']
-    chat_id = config['chat_id']
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-    with open(image_path, 'rb') as photo:
-        requests.post(url, data={'chat_id': chat_id}, files={'photo': photo})
-
-def send_telegram_file(file_path, config_file='telegram_config.json'):
-    with open(config_file, 'r') as file:
-        config = json.load(file)
-    bot_token = config['bot_token']
-    chat_id = config['chat_id']
-
-    url = f"https://api.telegram.org/bot{bot_token}/sendDocument"
-    with open(file_path, 'rb') as doc:
-        requests.post(url, data={'chat_id': chat_id}, files={'document': doc})
+from alert_utils import send_telegram_message, send_telegram_image, send_telegram_file
 
 def run_backtest_from_csv(file_path='backtest.csv', log_file='trade_log.csv'):
     daily_profit = defaultdict(float)
     total_profit = 0
     cumulative_profit = []
     trade_labels = []
-
     current_profit = 0
-    trade_counter = 0
 
     with open(file_path, 'r') as file:
         reader = csv.DictReader(file)
-
         with open(log_file, 'w', newline='') as log:
-            fieldnames = ['timestamp', 'day', 'trade', 'profit', 'status']
-            writer = csv.DictWriter(log, fieldnames=fieldnames)
+            writer = csv.DictWriter(log, fieldnames=['timestamp', 'day', 'trade', 'profit', 'status'])
             writer.writeheader()
 
             for row in reader:
@@ -57,8 +31,7 @@ def run_backtest_from_csv(file_path='backtest.csv', log_file='trade_log.csv'):
 """
                 print(f"[BACKTEST] Day {day}, Trade {trade} — Profit: {profit}")
                 send_telegram_message(message)
-
-                time.sleep(2)  # 🔁 Replay delay (2 seconds between trades)
+                time.sleep(2)
 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 writer.writerow({
@@ -71,12 +44,11 @@ def run_backtest_from_csv(file_path='backtest.csv', log_file='trade_log.csv'):
 
                 daily_profit[day] += profit
                 total_profit += profit
-                trade_counter += 1
                 current_profit += profit
                 cumulative_profit.append(current_profit)
                 trade_labels.append(f"D{day}-T{trade}")
 
-    # 📈 Profit graph
+    # Plot and send graph
     plt.figure(figsize=(10, 4))
     plt.plot(trade_labels, cumulative_profit, marker='o')
     plt.title('Cumulative Profit Curve')
@@ -84,28 +56,34 @@ def run_backtest_from_csv(file_path='backtest.csv', log_file='trade_log.csv'):
     plt.ylabel('Profit ($)')
     plt.grid(True)
     plt.tight_layout()
-    graph_path = 'profit_curve.png'
-    plt.savefig(graph_path)
+    plt.savefig("profit_curve.png")
     plt.close()
+    send_telegram_image("profit_curve.png")
 
-    send_telegram_image(graph_path)
-
-    # 📬 Summary report
+    # Build summary message
     summary = "\n📈 *Backtest Summary*\n\n"
     for day, p in daily_profit.items():
         emoji = "✅" if p >= 0 else "❌"
         summary += f"• Day {day}: ${p:.2f} {emoji}\n"
-
         if p < 0:
-            warning = f"⚠️ *Warning:* Day {day} ended in a net loss of ${p:.2f} ❌"
-            send_telegram_message(warning)
+            send_telegram_message(f"⚠️ *Warning:* Day {day} ended in loss (${p:.2f}) ❌")
 
     summary += f"\n💰 *Total Net Profit:* ${total_profit:.2f}"
-    print("[BACKTEST] Sending summary...")
     send_telegram_message(summary)
 
-    # 📤 Send CSV log to Telegram
+    # Save clean summary to summary.txt
+    plain_summary = "\nBacktest Summary\n\n"
+    for day, p in daily_profit.items():
+        status = "Profit" if p >= 0 else "Loss"
+        plain_summary += f"Day {day}: ${p:.2f} ({status})\n"
+    plain_summary += f"\nTotal Net Profit: ${total_profit:.2f}"
+
+    with open("summary.txt", "w") as f:
+        f.write(plain_summary)
+
+    # Send trade log
     send_telegram_file(log_file)
 
-# 🚀 Run
-run_backtest_from_csv()
+# 🚀 Run it
+if __name__ == "__main__":
+    run_backtest_from_csv()
