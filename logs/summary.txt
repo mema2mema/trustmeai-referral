@@ -1,6 +1,0 @@
-📅 Days: 25
-💵 Initial Investment: $150.0
-📈 Daily Profit %: 40.0
-🔁 Trades/Day: 5
-💰 Final Balance: $2259751.56
-💸 Total Withdrawn: $0.00

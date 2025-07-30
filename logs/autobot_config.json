@@ -1,8 +1,8 @@
 {
-  "initial_investment": 150.0,
-  "daily_profit_percent": 35.0,
+  "initial_investment": 100.0,
+  "daily_profit_percent": 20.0,
   "mode": "reinvest",
-  "trades_per_day": 10,
+  "trades_per_day": 3,
   "cap_limit": 300.0,
-  "days": 75
+  "days": 5
 }
