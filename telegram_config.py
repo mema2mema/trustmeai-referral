@@ -1,7 +1,2 @@
-import json
-
-with open("telegram_config.json", "r") as f:
-    config = json.load(f)
-
-TELEGRAM_BOT_TOKEN = config["bot_token"]
-TELEGRAM_CHAT_ID = config["chat_id"]
+TELEGRAM_BOT_TOKEN = "YOUR_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"

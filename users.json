@@ -1,1 +1,8 @@
-{}
+[
+  {
+    "user_id": "user123",
+    "referred_by": null,
+    "referrals": [],
+    "earnings": 0.0
+  }
+]

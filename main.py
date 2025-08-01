@@ -1,69 +1,78 @@
 import streamlit as st
 import json
-from config import config
-from referral_ui import load_users, get_referral_count
+import subprocess
+import os
+from referral_ui import register_user, show_referral_ui, get_user
 
-# Load users
-users = load_users()
+BALANCE_FILE = "balance.json"
+BOT_STATUS_FILE = "bot_status.json"
 
-# Simulate user login (from session or fallback)
-email = st.session_state.get("user_email", None)
+def get_balance():
+    if not os.path.exists(BALANCE_FILE):
+        return 0
+    with open(BALANCE_FILE, "r") as f:
+        return json.load(f).get("balance", 0)
 
-st.set_page_config(page_title="TrustMe AI Dashboard", layout="centered")
-st.title("📊 TrustMe AI Dashboard")
+def set_balance(amount):
+    with open(BALANCE_FILE, "w") as f:
+        json.dump({"balance": amount}, f)
 
-if not email or email not in users:
-    st.warning("⚠️ Please register or login via referral page first.")
-    st.stop()
+def update_balance(amount):
+    balance = get_balance()
+    balance += amount
+    set_balance(balance)
 
-# Get current user
-user = users[email]
-name = user["name"]
-referral_code = user["referral_code"]
-referral_count = get_referral_count(users, referral_code)
-referral_link = f"https://trustmeai.online/?ref={referral_code}"
-referral_reward = referral_count * 5
+def get_bot_status():
+    if not os.path.exists(BOT_STATUS_FILE):
+        return False
+    with open(BOT_STATUS_FILE, "r") as f:
+        return json.load(f).get("running", False)
 
-# ------------------- Investment Panel -------------------
-st.subheader("💼 Investment Overview")
+def set_bot_status(running):
+    with open(BOT_STATUS_FILE, "w") as f:
+        json.dump({"running": running}, f)
 
-st.write("👤 Name:", name)
-st.write("📧 Email:", email)
-st.write("💰 Initial Investment:", f"${config['initial_investment']}")
-st.write("📈 Daily Profit %:", f"{config['daily_profit_percent']}%")
-st.write("📅 Duration:", f"{config['days']} days")
-st.write("🔁 Mode:", config["mode"].capitalize())
+st.title("🚀 TrustMe AI Admin Panel")
 
-# Placeholder for profit calculation (you can enhance later)
-estimated_profit = config['initial_investment']
-for day in range(config["days"]):
-    profit_today = estimated_profit * (config["daily_profit_percent"] / 100)
-    if config["mode"] == "reinvest":
-        estimated_profit += profit_today
-    else:
-        pass  # withdraw mode can skip reinvest logic
+query_params = st.query_params
+ref = query_params.get("ref", [None])[0]
+user_id = st.text_input("Enter your User ID", value="user123")
+if st.button("Register"):
+    register_user(user_id, referred_by=ref)
+    st.success("User registered!")
+    st.query_params.clear()
 
-st.write("💵 Estimated Final Profit:", f"${int(estimated_profit):,}")
+if get_user(user_id):
+    show_referral_ui(user_id)
 
-# ------------------- Referral Panel -------------------
-st.markdown("---")
-st.subheader("🎁 Your Referral Stats")
+st.subheader("💰 Wallet")
+st.write(f"Current Balance: ${get_balance():,.2f} USDT")
 
-st.write("🔗 **Referral Link:**")
-st.code(referral_link)
+col1, col2 = st.columns(2)
+with col1:
+    deposit = st.number_input("Deposit Amount", min_value=1.0, step=1.0)
+    if st.button("Deposit"):
+        update_balance(deposit)
+        st.success(f"Deposited ${deposit}")
 
-st.write(f"👥 **People You've Referred:** `{referral_count}`")
-st.write(f"💰 **Total Earned from Referrals:** `${referral_reward}`")
+with col2:
+    withdraw = st.number_input("Withdraw Amount", min_value=1.0, step=1.0)
+    if st.button("Withdraw"):
+        if withdraw <= get_balance():
+            update_balance(-withdraw)
+            st.success(f"Withdrew ${withdraw}")
+        else:
+            st.error("Insufficient balance.")
 
-# Table of referred users
-referred_users = [
-    {"Name": u["name"], "Email": u["email"]}
-    for u in users.values()
-    if u.get("referred_by") == referral_code
-]
-
-if referred_users:
-    st.markdown("### 🧾 People You've Referred")
-    st.dataframe(referred_users, use_container_width=True)
+st.subheader("🤖 Bot Controls")
+running = get_bot_status()
+if running:
+    if st.button("🛑 Stop Bot"):
+        subprocess.call(["pkill", "-f", "autobot.py"])
+        set_bot_status(False)
+        st.success("Bot stopped.")
 else:
-    st.info("No referrals yet. Share your link to start earning!")
+    if st.button("▶️ Start Bot"):
+        subprocess.Popen(["python", "autobot.py"])
+        set_bot_status(True)
+        st.success("Bot started.")

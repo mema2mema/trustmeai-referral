@@ -1,59 +1,57 @@
+import json
+import os
 import streamlit as st
-import uuid
 import pyperclip
 
-# Simulated DB — this will be replaced with real DB logic later
-mock_referrals = {
-    'user123': {
-        'total_referrals': 5,
-        'active_referrals': 3,
-        'earnings': 42.75
+USERS_FILE = "users.json"
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return []
+    with open(USERS_FILE, "r") as f:
+        return json.load(f)
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+
+def get_user(user_id):
+    users = load_users()
+    for user in users:
+        if user["user_id"] == user_id:
+            return user
+    return None
+
+def register_user(user_id, referred_by=None):
+    users = load_users()
+    if get_user(user_id):
+        return
+    new_user = {
+        "user_id": user_id,
+        "referred_by": referred_by,
+        "referrals": [],
+        "earnings": 0.0
     }
-}
+    users.append(new_user)
+    if referred_by:
+        ref_user = get_user(referred_by)
+        if ref_user:
+            ref_user["referrals"].append(user_id)
+    save_users(users)
 
-def get_current_user_id():
-    # Temporary static user ID
-    return 'user123'
+def get_referral_count(user_id):
+    user = get_user(user_id)
+    if not user:
+        return 0
+    return len(user["referrals"])
 
-def generate_referral_link(user_id, base_url="https://trustmeai.online"):
-    return f"{base_url}/?ref={user_id}"
+def show_referral_ui(current_user):
+    st.subheader("🔗 Referral Program")
+    link = f"http://localhost:8501/?ref={current_user}"
+    st.text_input("Your Referral Link", link)
+    if st.button("Copy Link"):
+        pyperclip.copy(link)
+        st.success("Link copied to clipboard!")
 
-def referral_ui():
-    st.header("🤝 Invite & Earn - TrustMe AI Referral Program")
-    
-    user_id = get_current_user_id()
-    referral_link = generate_referral_link(user_id)
-
-    st.subheader("🔗 Your Referral Link")
-    st.code(referral_link, language='text')
-    if st.button("📋 Copy to Clipboard"):
-        pyperclip.copy(referral_link)
-        st.success("Copied to clipboard!")
-
-    st.divider()
-
-    st.subheader("📈 Your Referral Stats")
-    stats = mock_referrals.get(user_id, {'total_referrals': 0, 'active_referrals': 0, 'earnings': 0.00})
-    col1, col2, col3 = st.columns(3)
-    col1.metric("👥 Total Referred", stats['total_referrals'])
-    col2.metric("✅ Active Users", stats['active_referrals'])
-    col3.metric("💵 Earnings", f"${stats['earnings']:.2f}")
-
-    st.divider()
-
-    st.subheader("💸 Commission Structure")
-    st.markdown("""
-    - 🥇 **Level 1:** 10% of referred user's deposit  
-    - 🥈 **Level 2:** 5% from their referrals  
-    - 🥉 **Level 3:** 2% from second-level referrals
-    """)
-
-    st.divider()
-
-    st.subheader("📤 Invite Friends Directly")
-    email = st.text_input("Enter your friend's email")
-    if st.button("Send Invite"):
-        if email:
-            st.success(f"Invitation sent to {email} with your referral link!")
-        else:
-            st.error("Please enter an email address.")
+    count = get_referral_count(current_user)
+    st.info(f"👥 You referred {count} user(s).")
