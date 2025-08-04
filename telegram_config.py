@@ -1,2 +1,4 @@
-TELEGRAM_BOT_TOKEN = "YOUR_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
+{
+  "bot_token": "7702985344:AAHdsIcjcL6tvbzCk-VB90bHuaCupEEfE74",
+  "admin_chat_id": "7862868701"
+}
