@@ -1,24 +1,30 @@
 import requests
 import json
-import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+CONFIG_PATH = "telegram_config.json"
 
-from utils.generate_summary import generate_summary
-from utils.generate_graph import generate_graph
-from wallet.wallet import get_balance, request_withdraw as withdraw
+def load_config():
+    with open(CONFIG_PATH, "r") as f:
+        return json.load(f)
 
-with open("telegram_config.json") as f:
-    config = json.load(f)
-
-BOT_TOKEN = config["bot_token"]
-CHAT_ID = config["chat_id"]
+def send_message(text):
+    config = load_config()
+    token = config["bot_token"]
+    chat_id = config["chat_id"]
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    requests.post(url, data=data)
 
 def send_withdraw_alert(amount):
-    summary = generate_summary()
-    graph = generate_graph()
-    text = f"🚨 Withdraw Request!\nAmount: {amount:.2f} USDT\n{summary}\n{graph}"
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": text}
-    requests.post(url, data=data)
+    send_message(f"📤 Withdraw request for {amount:.2f} USDT")
+
+def send_trade_alert(trade):
+    msg = (
+        f"✅ Trade Executed!\n"
+        f"ID: {trade['trade_id']}\n"
+        f"Amount: {trade['amount']} USDT\n"
+        f"Outcome: {trade['outcome']}\n"
+        f"PnL: {trade['pnl']} USDT"
+    )
+    send_message(msg)
