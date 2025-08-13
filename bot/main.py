@@ -1,17 +1,16 @@
-# TrustMe AI Telegram Bot — v4.0.0 (PTB 21 + health route)
-# - python-telegram-bot 21.x
-# - Webhook with health page on same domain (aiohttp)
-# - url_path fix for /webhook
-# - Polling mode still supported
 
-import os, io, csv, json, logging
+# TrustMe AI Telegram Bot — v4.0.1 (adaptive)
+# - Tries PTB 21-style run_webhook(web_app=...)
+# - If TypeError (PTB 20.x), falls back to run_webhook(...) without web_app
+# - Telegram works either way; health page ("/") only on PTB 21+.
+
+import os, csv, json, logging
 from datetime import datetime
 from pathlib import Path
 
 import pandas as pd, numpy as np
-import matplotlib; matplotlib.use('Agg')
+import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
 from dotenv import load_dotenv; load_dotenv()
 
 from aiohttp import web
@@ -23,7 +22,6 @@ from telegram.ext import (
     CallbackContext, ContextTypes, filters
 )
 
-# ----- Settings via env -----
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 TRADES_PATH = Path(os.getenv("TRADES_PATH", "data/trades.csv"))
@@ -58,19 +56,13 @@ from .utils import (
 from .wallet import Wallet
 from .summary import build_summary_text
 
-# ---------- Health routes ----------
-async def health(request):
-    return web.Response(text="TrustMe AI Bot OK", content_type="text/plain")
+# --- small HTTP for PTB21 ---
+async def health(request): return web.Response(text="TrustMe AI Bot OK", content_type="text/plain")
+async def favicon(request): return web.Response(status=204)
 
-async def favicon(request):
-    return web.Response(status=204)
-
-# ---------- Referral helpers ----------
 def admin_chat_id():
-    try:
-        return int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID else None
-    except:
-        return None
+    try: return int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID else None
+    except: return None
 
 def add_subscriber(chat_id: int):
     d = load_json(SUBSCRIBERS_FILE, {"subs": []})
@@ -82,8 +74,7 @@ def remove_subscriber(chat_id: int):
     if chat_id in d["subs"]:
         d["subs"].remove(chat_id); save_json(SUBSCRIBERS_FILE, d)
 
-def get_subscribers():
-    return load_json(SUBSCRIBERS_FILE, {"subs": []}).get("subs", [])
+def get_subscribers(): return load_json(SUBSCRIBERS_FILE, {"subs": []}).get("subs", [])
 
 def ref_data(): return load_json(REFERRALS_FILE, {"users": {}, "stats": {}})
 def save_ref_data(d): save_json(REFERRALS_FILE, d)
@@ -116,33 +107,36 @@ _wallet = Wallet(WALLET_FILE)
 
 def wd_data(): return load_json(WITHDRAWALS_FILE, {"next_id":1,"pending":[],"history":[]})
 def save_wd_data(d): save_json(WITHDRAWALS_FILE, d)
+
 def new_withdrawal(uid:int, amount:float):
     d=wd_data(); wid=d["next_id"]; d["next_id"]+=1
     item={"id":wid,"user_id":int(uid),"amount":float(amount),"ts":datetime.utcnow().isoformat(),"status":"pending"}
     d["pending"].append(item); save_wd_data(d); return item
+
 def approve_withdrawal(wid:int):
     d=wd_data(); idx=next((i for i,x in enumerate(d["pending"]) if x["id"]==wid),None)
     if idx is None: return False,"Request not found",None
     item=d["pending"].pop(idx); ok,msg=_wallet.withdraw(item["user_id"], item["amount"])
     item["status"]="approved" if ok else "rejected"; d["history"].append(item); save_wd_data(d)
     return ok, ("Withdrawal approved" if ok else "Rejected: "+msg), item
+
 def deny_withdrawal(wid:int):
     d=wd_data(); idx=next((i for i,x in enumerate(d["pending"]) if x["id"]==wid),None)
     if idx is None: return False,"Request not found",None
     item=d["pending"].pop(idx); item["status"]="rejected"; d["history"].append(item); save_wd_data(d)
     return True,"Withdrawal denied.", item
 
-# ---------- Commands ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ----- commands -----
+async def start(update, context):
     chat_id=update.effective_chat.id; add_subscriber(chat_id)
     payload = ""
     if update.message and update.message.text:
         parts = update.message.text.split(maxsplit=1)
-        if len(parts) > 1: payload = parts[1].strip()
+        if len(parts)>1: payload=parts[1].strip()
     if payload.startswith("ref="): set_referrer(chat_id, payload.split("=",1)[1])
-    code = encode_ref(chat_id)
+    code=encode_ref(chat_id)
     await update.message.reply_html(
-        "<b>TrustMe AI Bot — v4.0.0</b>\n\n"
+        "<b>TrustMe AI Bot — v4.0.1</b>\n\n"
         "You're subscribed to real-time trade alerts.\n\n"
         "<b>Key commands</b>\n"
         "/summary — performance summary\n"
@@ -203,14 +197,14 @@ async def graph_cmd(update, context):
     except Exception as e: await update.message.reply_text(f"Graph error: {e}")
 
 async def balance_cmd(update, context):
-    uid=update.effective_chat.id; bal= _wallet.balance(uid)
+    uid=update.effective_chat.id; bal= Wallet(WALLET_FILE).balance(uid)
     await update.message.reply_html(f"💼 <b>Mock USDT Balance:</b> <code>{bal:.2f}</code>")
 
 async def deposit_cmd(update, context):
     uid=update.effective_chat.id
     try:
-        amount=float(context.args[0]); _wallet.deposit(uid, amount)
-        await update.message.reply_html(f"✅ Deposited <b>{amount:.2f}</b> USDT\nNew balance: <code>{_wallet.balance(uid):.2f}</code>")
+        amount=float(context.args[0]); Wallet(WALLET_FILE).deposit(uid, amount)
+        await update.message.reply_html(f"✅ Deposited <b>{amount:.2f}</b> USDT\nNew balance: <code>{Wallet(WALLET_FILE).balance(uid):.2f}</code>")
     except: await update.message.reply_html("Usage: <code>/deposit 100</code>")
 
 async def withdraw_cmd(update, context):
@@ -358,7 +352,6 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("leaderboard", leaderboard_cmd))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(callback_handler))
-
     if app.job_queue is None: raise RuntimeError("Install python-telegram-bot[job-queue]")
     app.job_queue.run_repeating(monitor_trades_job, interval=JOB_INTERVAL_SECONDS, first=5)
     app.job_queue.run_repeating(daily_report_job, interval=3600, first=60)
@@ -376,22 +369,32 @@ def main():
         if not base: raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
         webhook_url = base.rstrip("/") + WEBHOOK_PATH
         log.info(f"Starting webhook on 0.0.0.0:{port} webhook_url={webhook_url}")
-
-        # Small HTTP app for health + favicon
-        web_app = web.Application()
-        web_app.router.add_get("/", health)
-        web_app.router.add_get("/favicon.ico", favicon)
-
-        app.run_webhook(
-            web_app=web_app,
-            listen="0.0.0.0",
-            port=port,
-            url_path=WEBHOOK_PATH,
-            webhook_url=webhook_url,
-            secret_token=WEBHOOK_SECRET,
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=False
-        )
+        # Try PTB21 signature first (with web_app)
+        try:
+            web_app = web.Application()
+            web_app.router.add_get("/", health); web_app.router.add_get("/favicon.ico", favicon)
+            app.run_webhook(
+                web_app=web_app,
+                listen="0.0.0.0",
+                port=port,
+                url_path=WEBHOOK_PATH,
+                webhook_url=webhook_url,
+                secret_token=WEBHOOK_SECRET,
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=False
+            )
+        except TypeError as e:
+            # PTB 20.x fallback: no web_app support; '/' will 404 (that's OK)
+            log.warning("PTB < 21 detected (no web_app). Falling back. Root '/' will 404. Details: %s", e)
+            app.run_webhook(
+                listen="0.0.0.0",
+                port=port,
+                url_path=WEBHOOK_PATH,
+                webhook_url=webhook_url,
+                secret_token=WEBHOOK_SECRET,
+                allowed_updates=Update.ALL_TYPES,
+                drop_pending_updates=False
+            )
 
 if __name__ == "__main__":
     main()

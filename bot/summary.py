@@ -1,3 +1,4 @@
+
 import numpy as np, pandas as pd
 def summarize_df(df: pd.DataFrame)->dict:
     out={}; n=len(df); out['trades']=int(n)
