@@ -43,7 +43,6 @@ def summarize_df(df: pd.DataFrame) -> dict:
 def build_summary_text(df: pd.DataFrame, meta: dict) -> str:
     s = summarize_df(df)
     hints = []
-
     if s["profit_factor"] < 1.2:
         hints.append("Low profit factor; consider tightening stops or improving entry filters.")
     if s["win_rate"] < 50:
@@ -52,7 +51,6 @@ def build_summary_text(df: pd.DataFrame, meta: dict) -> str:
         hints.append("Drawdown is large relative to profits; reduce position size or add diversification.")
     if s["trades"] < 20:
         hints.append("Sample size is small; collect more trades for reliable stats.")
-
     text = (
         f"<b>Performance Summary</b>\n"
         f"File: <code>{meta.get('path','')}</code>\n"

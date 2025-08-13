@@ -1,4 +1,6 @@
-# TrustMe AI Telegram Bot v3.9
+# TrustMe AI Telegram Bot v3.9.2
+# - Proper PTB v20 run_polling/run_webhook
+# - JobQueue via python-telegram-bot[job-queue]
 import os
 import io
 import csv
@@ -15,7 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# auto-load .env if present
+# auto-load .env
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -58,24 +60,12 @@ LAST_REPORT_FILE = STATE_DIR / "last_report.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("trustmeai.bot")
-
 ensure_dirs([STATE_DIR, TRADES_PATH.parent, UPLOADS_DIR])
 
-def is_authorized(chat_id: int) -> bool:
-    if not ADMIN_CHAT_ID:
-        return True
-    try:
-        return int(ADMIN_CHAT_ID) == int(chat_id)
-    except:
-        return False
-
 def admin_chat_id() -> int | None:
-    if not ADMIN_CHAT_ID:
-        return None
-    try:
-        return int(ADMIN_CHAT_ID)
-    except:
-        return None
+    if not ADMIN_CHAT_ID: return None
+    try: return int(ADMIN_CHAT_ID)
+    except: return None
 
 def add_subscriber(chat_id: int):
     data = load_json(SUBSCRIBERS_FILE, default={"subs": []})
@@ -95,8 +85,7 @@ def get_subscribers():
 def ref_data():
     return load_json(REFERRALS_FILE, default={"users": {}, "stats": {}})
 
-def save_ref_data(d):
-    save_json(REFERRALS_FILE, d)
+def save_ref_data(d): save_json(REFERRALS_FILE, d)
 
 def set_referrer(user_id: int, ref_code: str) -> bool:
     d = ref_data()
@@ -139,48 +128,37 @@ _wallet = Wallet(WALLET_FILE)
 def wd_data():
     return load_json(WITHDRAWALS_FILE, default={"next_id": 1, "pending": [], "history": []})
 
-def save_wd_data(d):
-    save_json(WITHDRAWALS_FILE, d)
+def save_wd_data(d): save_json(WITHDRAWALS_FILE, d)
 
 def new_withdrawal(user_id: int, amount: float) -> dict:
     d = wd_data()
-    wid = d["next_id"]
-    d["next_id"] += 1
+    wid = d["next_id"]; d["next_id"] += 1
     item = {"id": wid, "user_id": int(user_id), "amount": float(amount), "ts": datetime.utcnow().isoformat(), "status": "pending"}
-    d["pending"].append(item)
-    save_wd_data(d)
-    return item
+    d["pending"].append(item); save_wd_data(d); return item
 
-def approve_withdrawal(wid: int) -> tuple[bool, str, dict | None]:
+def approve_withdrawal(wid: int):
     d = wd_data()
     idx = next((i for i, x in enumerate(d["pending"]) if x["id"] == wid), None)
-    if idx is None:
-        return False, "Request not found or already handled.", None
+    if idx is None: return False, "Request not found or already handled.", None
     item = d["pending"].pop(idx)
     uid, amt = item["user_id"], item["amount"]
     ok, msg = _wallet.withdraw(uid, amt)
     if ok:
-        item["status"] = "approved"
-        d["history"].append(item)
-        save_wd_data(d)
+        item["status"] = "approved"; d["history"].append(item); save_wd_data(d)
         return True, f"Withdrawal approved: {amt:.2f} USDT", item
     else:
-        item["status"] = "rejected"
-        d["history"].append(item)
-        save_wd_data(d)
+        item["status"] = "rejected"; d["history"].append(item); save_wd_data(d)
         return False, f"Rejected (insufficient balance). {msg}", item
 
-def deny_withdrawal(wid: int) -> tuple[bool, str, dict | None]:
+def deny_withdrawal(wid: int):
     d = wd_data()
     idx = next((i for i, x in enumerate(d["pending"]) if x["id"] == wid), None)
-    if idx is None:
-        return False, "Request not found or already handled.", None
-    item = d["pending"].pop(idx)
-    item["status"] = "rejected"
-    d["history"].append(item)
-    save_wd_data(d)
+    if idx is None: return False, "Request not found or already handled.", None
+    item = d["pending"].pop(idx); item["status"] = "rejected"
+    d["history"].append(item); save_wd_data(d)
     return True, "Withdrawal denied.", item
 
+# --- command handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     add_subscriber(chat_id)
@@ -195,10 +173,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_html("🎉 Referral linked successfully. Welcome aboard!")
         else:
             await update.message.reply_html("ℹ️ Referral link processed.")
-
     code = encode_ref(chat_id)
-    text = (
-        "<b>TrustMe AI Bot — v3.9</b>\n\n"
+    await update.message.reply_html(
+        "<b>TrustMe AI Bot — v3.9.2</b>\n\n"
         "You're subscribed to real-time trade alerts.\n\n"
         "<b>Key commands</b>\n"
         "/summary — performance summary\n"
@@ -214,52 +191,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Upload a .csv to analyze it instantly.\n\n"
         f"Your referral code: <code>{code}</code>"
     )
-    await update.message.reply_html(text)
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await start(update, context)
+async def help_cmd(update, context): await start(update, context)
 
-async def subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def subscribe(update, context):
     add_subscriber(update.effective_chat.id)
     await update.message.reply_html("✅ Subscribed to alerts in this chat.")
 
-async def unsubscribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def unsubscribe(update, context):
     remove_subscriber(update.effective_chat.id)
     await update.message.reply_html("🚫 Unsubscribed from alerts in this chat.")
 
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def status(update, context):
     subs = get_subscribers()
-    msg = [
+    await update.message.reply_html("\n".join([
         "<b>Status</b>",
         f"Subscribers: {len(subs)}",
         f"Monitoring: <code>{TRADES_PATH}</code> every {JOB_INTERVAL_SECONDS}s",
         f"Mode: {'Polling' if POLLING_MODE else 'Webhook'}"
-    ]
-    await update.message.reply_html("\n".join(msg))
+    ]))
 
-async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def log_cmd(update, context):
     if not TRADES_PATH.exists():
-        await update.message.reply_html("No trades file found yet.")
-        return
+        await update.message.reply_html("No trades file found yet."); return
     tail = read_csv_tail(TRADES_PATH, n=25)
     if not tail:
-        await update.message.reply_html("Trades file is empty.")
-        return
+        await update.message.reply_html("Trades file is empty."); return
     lines = ["<b>Last 25 trades</b>"]
     for row in tail:
         ts = row.get("timestamp") or row.get("time") or row.get("date") or ""
-        sym = row.get("symbol","?")
-        side = row.get("side","?").upper()
+        sym = row.get("symbol","?"); side = (row.get("side") or "").upper() or "?"
         qty = row.get("qty") or row.get("quantity") or row.get("size") or ""
         price = row.get("price") or row.get("fill_price") or ""
         pnl = row.get("pnl") or row.get("PnL") or row.get("profit") or ""
         lines.append(f"• {safe_html(ts)} {safe_html(sym)} {safe_html(side)} qty=<code>{safe_html(qty)}</code> price=<code>{safe_html(price)}</code> pnl=<code>{safe_html(pnl)}</code>")
     await update.message.reply_html("\n".join(lines))
 
-async def summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def summary_cmd(update, context):
     if not TRADES_PATH.exists():
-        await update.message.reply_html("No trades file found yet.")
-        return
+        await update.message.reply_html("No trades file found yet."); return
     try:
         df, meta = parse_trades_csv(TRADES_PATH)
         text = build_summary_text(df, meta)
@@ -268,53 +238,42 @@ async def summary_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"Error reading CSV: {e}")
 
-async def graph_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def graph_cmd(update, context):
     if not TRADES_PATH.exists():
-        await update.message.reply_html("No trades file found yet.")
-        return
+        await update.message.reply_html("No trades file found yet."); return
     try:
         df, meta = parse_trades_csv(TRADES_PATH)
         if "equity" not in df.columns:
             start_equity = float(os.getenv("START_EQUITY", "1000"))
             df["equity"] = start_equity + df["pnl"].cumsum()
         fig_path = STATE_DIR / "equity.png"
-        plt.figure()
-        plt.plot(df["timestamp"], df["equity"])
-        plt.title("Equity Curve")
-        plt.xlabel("Time")
-        plt.ylabel("Equity")
-        plt.xticks(rotation=30)
-        plt.tight_layout()
-        plt.savefig(fig_path, dpi=150)
-        plt.close()
+        plt.figure(); plt.plot(df["timestamp"], df["equity"]); plt.title("Equity Curve")
+        plt.xlabel("Time"); plt.ylabel("Equity"); plt.xticks(rotation=30); plt.tight_layout()
+        plt.savefig(fig_path, dpi=150); plt.close()
         with open(fig_path, "rb") as f:
             await update.message.reply_photo(InputFile(f, filename="equity.png"), caption="Equity curve")
     except Exception as e:
         await update.message.reply_text(f"Error generating graph: {e}")
 
-async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def balance_cmd(update, context):
     uid = update.effective_chat.id
-    bal = _wallet.balance(uid)
-    await update.message.reply_html(f"💼 <b>Mock USDT Balance:</b> <code>{bal:.2f}</code>")
+    await update.message.reply_html(f"💼 <b>Mock USDT Balance:</b> <code>{_wallet.balance(uid):.2f}</code>")
 
-async def deposit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def deposit_cmd(update, context):
     uid = update.effective_chat.id
     try:
-        amount = float(context.args[0])
-        _wallet.deposit(uid, amount)
+        amount = float(context.args[0]); _wallet.deposit(uid, amount)
         await update.message.reply_html(f"✅ Deposited <b>{amount:.2f}</b> USDT\nNew balance: <code>{_wallet.balance(uid):.2f}</code>")
     except Exception:
         await update.message.reply_html("Usage: <code>/deposit 100</code>")
 
-async def withdraw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def withdraw_cmd(update, context):
     uid = update.effective_chat.id
     try:
         amount = float(context.args[0])
         if amount <= 0:
-            await update.message.reply_html("Amount must be > 0")
-            return
-        wd = new_withdrawal(uid, amount)
-        admin_id = admin_chat_id()
+            await update.message.reply_html("Amount must be > 0"); return
+        wd = new_withdrawal(uid, amount); admin_id = admin_chat_id()
         if admin_id:
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Approve", callback_data=f"wd:approve:{wd['id']}"),
@@ -323,12 +282,8 @@ async def withdraw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=(f"💸 <b>Withdraw Request</b>\n"
-                          f"ID: <code>{wd['id']}</code>\n"
-                          f"User: <code>{uid}</code>\n"
-                          f"Amount: <b>{amount:.2f}</b> USDT"),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=kb
+                    text=(f"💸 <b>Withdraw Request</b>\nID: <code>{wd['id']}</code>\nUser: <code>{uid}</code>\nAmount: <b>{amount:.2f}</b> USDT"),
+                    parse_mode=ParseMode.HTML, reply_markup=kb
                 )
             except Exception as e:
                 log.warning(f"Couldn't notify admin: {e}")
@@ -339,64 +294,47 @@ async def withdraw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         await update.message.reply_html("Usage: <code>/withdraw 50</code>")
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+async def callback_handler(update, context):
+    q = update.callback_query; await q.answer()
     data = q.data or ""
-    try:
-        kind, action, sid = data.split(":", 2)
-    except Exception:
-        return
+    try: kind, action, sid = data.split(":", 2)
+    except Exception: return
     if kind == "wd":
         wid = int(sid)
         if action == "approve":
-            ok, msg, item = approve_withdrawal(wid)
-            await q.edit_message_text(f"Admin: {msg}")
+            ok, msg, item = approve_withdrawal(wid); await q.edit_message_text(f"Admin: {msg}")
             if item:
-                try:
-                    await context.bot.send_message(chat_id=item["user_id"], text=f"✅ Your withdrawal of {item['amount']:.2f} USDT has been approved.")
-                except Exception:
-                    pass
+                try: await context.bot.send_message(chat_id=item["user_id"], text=f"✅ Your withdrawal of {item['amount']:.2f} USDT has been approved.")
+                except Exception: pass
         elif action == "deny":
-            ok, msg, item = deny_withdrawal(wid)
-            await q.edit_message_text(f"Admin: {msg}")
+            ok, msg, item = deny_withdrawal(wid); await q.edit_message_text(f"Admin: {msg}")
             if item:
-                try:
-                    await context.bot.send_message(chat_id=item["user_id"], text=f"❌ Your withdrawal of {item['amount']:.2f} USDT was denied.")
-                except Exception:
-                    pass
+                try: await context.bot.send_message(chat_id=item["user_id"], text=f"❌ Your withdrawal of {item['amount']:.2f} USDT was denied.")
+                except Exception: pass
 
-async def referral_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_chat.id
-    link, stats = referral_summary(uid)
-    code = encode_ref(uid)
-    text = (
-        "<b>Referral Program</b>\n"
-        f"Your code: <code>{code}</code>\n"
-        f"Deep link: {safe_html(link)}\n\n"
-        f"Direct signups: <b>{stats.get('direct',0)}</b>\n"
-        f"Indirect (Level 2): <b>{stats.get('indirect',0)}</b>\n"
-        "Share your link!"
-    )
+async def referral_cmd(update, context):
+    uid = update.effective_chat.id; link, stats = referral_summary(uid); code = encode_ref(uid)
+    text = ("<b>Referral Program</b>\n"
+            f"Your code: <code>{code}</code>\n"
+            f"Deep link: {safe_html(link)}\n\n"
+            f"Direct signups: <b>{stats.get('direct',0)}</b>\n"
+            f"Indirect (Level 2): <b>{stats.get('indirect',0)}</b>\n"
+            "Share your link!")
     await update.message.reply_html(text, disable_web_page_preview=True)
 
-async def leaderboard_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def leaderboard_cmd(update, context):
     rows = top_referrers(10)
-    if not rows:
-        await update.message.reply_html("No referrals yet.")
-        return
+    if not rows: await update.message.reply_html("No referrals yet."); return
     lines = ["<b>Top Referrers</b>"]
     for i,(uid,total,direct,indirect) in enumerate(rows, start=1):
         lines.append(f"{i}. <code>{uid}</code> — total: <b>{total}</b> (direct {direct}, L2 {indirect})")
     await update.message.reply_html("\n".join(lines))
 
-async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_document(update, context):
     doc = update.message.document
     if not doc or not doc.file_name.lower().endswith(".csv"):
-        await update.message.reply_html("Please upload a .csv file.")
-        return
-    file = await doc.get_file()
-    dest = UPLOADS_DIR / f"{int(time.time())}_{doc.file_name}"
+        await update.message.reply_html("Please upload a .csv file."); return
+    file = await doc.get_file(); dest = UPLOADS_DIR / f"{int(time.time())}_{doc.file_name}"
     await file.download_to_drive(dest)
     try:
         df, meta = parse_trades_csv(dest)
@@ -404,117 +342,80 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_html(text, disable_web_page_preview=True)
         if os.getenv("SET_UPLOADED_AS_ACTIVE", "1") == "1":
             try:
-                TRADES_PATH.write_bytes(dest.read_bytes())
-                await update.message.reply_html("Set this CSV as the active trades file for alerts/graphs.")
-            except Exception as e:
-                pass
+                TRADES_PATH.write_bytes(dest.read_bytes()); await update.message.reply_html("Set this CSV as the active trades file for alerts/graphs.")
+            except Exception: pass
         await send_report(context, chat_ids=[update.effective_chat.id], title_prefix="Upload")
     except Exception as e:
         await update.message.reply_text(f"Upload OK, but failed to analyze: {e}")
 
-def generate_report_files() -> tuple[Path | None, Path | None]:
-    if not TRADES_PATH.exists():
-        return None, None
+def generate_report_files():
+    if not TRADES_PATH.exists(): return None, None
     try:
         df, meta = parse_trades_csv(TRADES_PATH)
         if "equity" not in df.columns:
             start_equity = float(os.getenv("START_EQUITY", "1000"))
             df["equity"] = start_equity + df["pnl"].cumsum()
         fig_path = STATE_DIR / "equity.png"
-        plt.figure()
-        plt.plot(df["timestamp"], df["equity"])
-        plt.title("Equity Curve")
-        plt.xlabel("Time")
-        plt.ylabel("Equity")
-        plt.xticks(rotation=30)
-        plt.tight_layout()
-        plt.savefig(fig_path, dpi=150)
-        plt.close()
-        summary_text = build_summary_text(df, meta)
+        plt.figure(); plt.plot(df["timestamp"], df["equity"]); plt.title("Equity Curve")
+        plt.xlabel("Time"); plt.ylabel("Equity"); plt.xticks(rotation=30); plt.tight_layout()
+        plt.savefig(fig_path, dpi=150); plt.close()
         txt_path = STATE_DIR / "performance-report.txt"
-        txt_path.write_text(summary_text, encoding="utf-8")
+        txt_path.write_text(build_summary_text(df, meta), encoding="utf-8")
         return txt_path, fig_path
-    except Exception:
-        return None, None
+    except Exception: return None, None
 
 async def send_report(context: CallbackContext, chat_ids=None, title_prefix="Auto"):
     txt_path, fig_path = generate_report_files()
-    if not txt_path or not fig_path:
-        return
-    if not chat_ids:
-        chat_ids = get_subscribers()
+    if not txt_path or not fig_path: return
+    if not chat_ids: chat_ids = get_subscribers()
     for cid in chat_ids:
         try:
             await context.bot.send_message(chat_id=cid, text=f"🧾 <b>{title_prefix} Performance Report</b>", parse_mode=ParseMode.HTML)
-            with open(txt_path, "rb") as f:
-                await context.bot.send_document(chat_id=cid, document=InputFile(f, filename="performance-report.txt"))
-            with open(fig_path, "rb") as f:
-                await context.bot.send_photo(chat_id=cid, photo=InputFile(f, filename="equity.png"), caption="Equity curve")
-        except Exception:
-            pass
+            with open(txt_path, "rb") as f: await context.bot.send_document(chat_id=cid, document=InputFile(f, filename="performance-report.txt"))
+            with open(fig_path, "rb") as f: await context.bot.send_photo(chat_id=cid, photo=InputFile(f, filename="equity.png"), caption="Equity curve")
+        except Exception: pass
 
 async def daily_report_job(context: CallbackContext):
-    if not DAILY_REPORT_ENABLE:
-        return
-    today = now_date_str()
-    last = load_json(LAST_REPORT_FILE, default={"date": ""}).get("date", "")
-    if last == today:
-        return
+    if not DAILY_REPORT_ENABLE: return
+    today = now_date_str(); last = load_json(LAST_REPORT_FILE, default={"date": ""}).get("date", "")
+    if last == today: return
     if TRADES_PATH.exists():
         try:
             df, _ = parse_trades_csv(TRADES_PATH)
             if len(df) > 0:
-                await send_report(context, title_prefix="Daily")
-                save_json(LAST_REPORT_FILE, {"date": today})
-        except Exception:
-            pass
+                await send_report(context, title_prefix="Daily"); save_json(LAST_REPORT_FILE, {"date": today})
+        except Exception: pass
 
 async def monitor_trades_job(context: CallbackContext):
-    chat_ids = get_subscribers()
-    if not chat_ids:
-        return
-    tracker = load_json(TRACKER_FILE, default={"last_line": 0})
-    last_line = tracker.get("last_line", 0)
-    if not TRADES_PATH.exists():
-        return
+    chat_ids = get_subscribers(); if not chat_ids: return
+    tracker = load_json(TRACKER_FILE, default={"last_line": 0}); last_line = tracker.get("last_line", 0)
+    if not TRADES_PATH.exists(): return
     try:
         with TRADES_PATH.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
-    except Exception:
-        return
-    total = len(rows)
-    if total < last_line:
-        last_line = 0
+            reader = csv.DictReader(f); rows = list(reader)
+    except Exception: return
+    total = len(rows); 
+    if total < last_line: last_line = 0
     new_rows = rows[last_line:]
     if new_rows:
         for row in new_rows:
             ts = row.get("timestamp") or row.get("time") or row.get("date") or ""
-            sym = row.get("symbol", "?")
-            side = (row.get("side") or "").upper() or "?"
+            sym = row.get("symbol","?"); side = (row.get("side") or "").upper() or "?"
             qty = row.get("qty") or row.get("quantity") or row.get("size") or ""
             price = row.get("price") or row.get("fill_price") or ""
             pnl = row.get("pnl") or row.get("PnL") or row.get("profit") or ""
             emoji = "🟢" if str(pnl).strip().startswith("-")==False else "🔴"
-            text = (
-                f"⚡ <b>Trade Executed</b>\n"
-                f"{safe_html(ts)} — <b>{safe_html(sym)}</b> <b>{safe_html(side)}</b>\n"
-                f"qty=<code>{safe_html(qty)}</code> price=<code>{safe_html(price)}</code>\n"
-                f"PnL: {emoji} <code>{safe_html(pnl)}</code>"
-            )
+            text = (f"⚡ <b>Trade Executed</b>\n{safe_html(ts)} — <b>{safe_html(sym)}</b> <b>{safe_html(side)}</b>\n"
+                    f"qty=<code>{safe_html(qty)}</code> price=<code>{safe_html(price)}</code>\n"
+                    f"PnL: {emoji} <code>{safe_html(pnl)}</code>")
             for cid in chat_ids:
-                try:
-                    await context.bot.send_message(chat_id=cid, text=text, parse_mode=ParseMode.HTML)
-                except Exception as e:
-                    pass
-        tracker["last_line"] = total
-        save_json(TRACKER_FILE, tracker)
-        if AUTO_REPORT_ON_TRADE:
-            await send_report(context, title_prefix="Auto")
+                try: await context.bot.send_message(chat_id=cid, text=text, parse_mode=ParseMode.HTML)
+                except Exception: pass
+        tracker["last_line"] = total; save_json(TRACKER_FILE, tracker)
+        if AUTO_REPORT_ON_TRADE: await send_report(context, title_prefix="Auto")
 
 def build_application() -> Application:
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    if not TELEGRAM_BOT_TOKEN: raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
@@ -531,34 +432,31 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("leaderboard", leaderboard_cmd))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(callback_handler))
+    # Jobs
+    if app.job_queue is None:
+        raise RuntimeError("JobQueue not available; ensure python-telegram-bot[job-queue] is installed")
     app.job_queue.run_repeating(monitor_trades_job, interval=JOB_INTERVAL_SECONDS, first=5)
     app.job_queue.run_repeating(daily_report_job, interval=3600, first=60)
     return app
 
 async def run_polling(app: Application):
     log.info("Starting in polling mode...")
-    await app.initialize()
-    await app.start()
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
-    await app.updater.idle()
+    await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
 
 async def run_webhook(app: Application):
     port = int(os.getenv("PORT", "8080"))
     base_url = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
-    if base_url and not base_url.startswith("http"):
-        base_url = "https://" + base_url
-    if not base_url:
-        raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
+    if base_url and not base_url.startswith("http"): base_url = "https://" + base_url
+    if not base_url: raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
     webhook_url = base_url.rstrip("/") + WEBHOOK_PATH
     log.info(f"Starting webhook on 0.0.0.0:{port} webhook_url={webhook_url}")
-    await app.initialize()
-    await app.start()
-    await app.bot.set_webhook(url=webhook_url, secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES)
-    await app.run_webhook(listen="0.0.0.0", port=port, secret_token=WEBHOOK_SECRET, webhook_url=webhook_url)
+    await app.run_webhook(listen="0.0.0.0", port=port, webhook_url=webhook_url,
+                          secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
+                          drop_pending_updates=False)
 
 def main():
     app = build_application()
-    if int(os.getenv("POLLING_MODE","1")):
+    if POLLING_MODE:
         asyncio.run(run_polling(app))
     else:
         asyncio.run(run_webhook(app))
