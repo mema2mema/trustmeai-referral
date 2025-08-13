@@ -457,7 +457,7 @@ def main():
             raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
         webhook_url = base_url.rstrip("/") + WEBHOOK_PATH
         log.info(f"Starting webhook on 0.0.0.0:{port} webhook_url={webhook_url}")
-        app.run_webhook(listen="0.0.0.0", port=port, webhook_url=webhook_url,
+        app.run_webhook(listen="0.0.0.0", port=port, url_path=WEBHOOK_PATH, webhook_url=webhook_url,
                         secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
                         drop_pending_updates=False)
 
