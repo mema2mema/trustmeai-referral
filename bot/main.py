@@ -30,7 +30,6 @@ from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     filters, ContextTypes, CallbackContext
 )
-from aiohttp import web
 
 from .summary import build_summary_text, summarize_df
 from .utils import (
@@ -417,12 +416,6 @@ async def monitor_trades_job(context: CallbackContext):
         tracker["last_line"] = total; save_json(TRACKER_FILE, tracker)
         if AUTO_REPORT_ON_TRADE: await send_report(context, title_prefix="Auto")
 
-async def health(request):
-    return web.Response(text="TrustMe AI Bot OK", content_type="text/plain")
-
-async def favicon(request):
-    return web.Response(status=204)
-
 def build_application() -> Application:
     if not TELEGRAM_BOT_TOKEN: raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -464,10 +457,7 @@ def main():
             raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
         webhook_url = base_url.rstrip("/") + WEBHOOK_PATH
         log.info(f"Starting webhook on 0.0.0.0:{port} webhook_url={webhook_url}")
-        web_app = web.Application()
-        web_app.router.add_get("/", health)
-        web_app.router.add_get("/favicon.ico", favicon)
-        app.run_webhook(web_app=web_app, listen="0.0.0.0", port=port, url_path=WEBHOOK_PATH, webhook_url=webhook_url,
+        app.run_webhook(listen="0.0.0.0", port=port, url_path=WEBHOOK_PATH, webhook_url=webhook_url,
                         secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
                         drop_pending_updates=False)
 
