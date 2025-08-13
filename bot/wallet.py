@@ -2,15 +2,6 @@ import json
 from pathlib import Path
 
 class Wallet:
-    """
-    Simple per-user wallet store.
-    Structure:
-    {
-      "balances": {
-        "<user_id>": 123.45
-      }
-    }
-    """
     def __init__(self, path: Path):
         self.path = path
         self._ensure()

@@ -1,4 +1,4 @@
-import os, json, csv, html, string
+import os, json, csv, html
 from pathlib import Path
 from typing import List, Dict
 
@@ -74,7 +74,6 @@ def parse_trades_csv(path: Path):
 def safe_html(text: str) -> str:
     return html.escape(str(text)) if text is not None else ""
 
-# ---------- Referral Code Helpers (base36) ----------
 alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 def encode_ref(user_id: int) -> str:
