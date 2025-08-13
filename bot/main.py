@@ -1,13 +1,11 @@
 
 import os, logging, secrets
-from pathlib import Path
 from dotenv import load_dotenv; load_dotenv()
 from aiohttp import web
 from telegram import Update
-from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-VERSION = "v5.1.0-adminui"
+VERSION = "v5.1.1-adminui-compat"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID","")
@@ -63,12 +61,7 @@ button{{padding:10px 14px;border-radius:10px;border:1px solid #334155;background
 <h1>TrustMe AI — Admin</h1>
 <div class="muted">Version {VERSION}</div>
 <div class="card">
-  <p>Web admin is live. Use Telegram commands while we finalize more controls:</p>
-  <ul>
-    <li><code>/version</code> — check bot version</li>
-    <li><code>/ping</code> — quick health</li>
-    <li><code>/admin</code> — get back to this link</li>
-  </ul>
+  <p>Web admin is live. We’ll add more controls next.</p>
 </div>
 </body></html>"""
     return web.Response(text=html, content_type="text/html")
@@ -81,9 +74,6 @@ def build_app() -> Application:
     app.add_handler(CommandHandler("version", version_cmd))
     app.add_handler(CommandHandler("ping", ping_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
-    if app.job_queue is None:
-        # PTB 21 sets job_queue by default when extras are installed, but keep guard
-        log.warning("JobQueue not available; install python-telegram-bot[job-queue]")
     return app
 
 def main():
@@ -92,21 +82,42 @@ def main():
         ADMIN_PANEL_TOKEN = secrets.token_hex(16)
         os.environ["ADMIN_PANEL_TOKEN"] = ADMIN_PANEL_TOKEN
         print("ADMIN_PANEL_TOKEN (temporary):", ADMIN_PANEL_TOKEN)
+
     app = build_app()
+
     if POLLING_MODE:
         log.info("Starting in polling mode...")
         app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
-    else:
-        log.info("Starting webhook with admin UI...")
-        base = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN","")
-        if base and not base.startswith("http"): base = "https://" + base
-        if not base:
-            raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
-        webhook_url = base.rstrip("/") + WEBHOOK_PATH
+        return
+
+    # webhook mode
+    base = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN","")
+    if base and not base.startswith("http"): base = "https://" + base
+    if not base:
+        raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
+    webhook_url = base.rstrip("/") + WEBHOOK_PATH
+
+    # Try PTB 21.x signature first (supports web_app)
+    try:
+        from telegram.ext import __version__ as PTB_VERSION
+    except Exception:
+        PTB_VERSION = "unknown"
+    log.info(f"python-telegram-bot version: {PTB_VERSION}")
+
+    try:
         web_app = web.Application()
         web_app.router.add_get("/", lambda r: web.Response(text="TrustMe AI Bot OK", content_type="text/plain"))
         web_app.router.add_get("/admin", admin_home)
+
+        log.info("Starting webhook with admin UI (PTB21 path)...")
         app.run_webhook(web_app=web_app, listen="0.0.0.0", port=int(os.getenv("PORT","8080")),
+                        url_path=WEBHOOK_PATH, webhook_url=webhook_url,
+                        secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
+                        drop_pending_updates=False)
+    except TypeError:
+        # PTB 20.x fallback: no web_app argument available.
+        log.warning("PTB 20.x detected. Admin UI disabled in webhook mode. Upgrade to PTB >=21 to enable /admin web.")
+        app.run_webhook(listen="0.0.0.0", port=int(os.getenv("PORT","8080")),
                         url_path=WEBHOOK_PATH, webhook_url=webhook_url,
                         secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
                         drop_pending_updates=False)
