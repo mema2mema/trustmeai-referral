@@ -1,29 +1,31 @@
 
-import os, logging, secrets
+import os, logging, threading
+from pathlib import Path
 from dotenv import load_dotenv; load_dotenv()
 from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-VERSION = "v5.1.1-adminui-compat"
+VERSION = "v5.1.2-adminui-polling"
 
+# env
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID","")
-POLLING_MODE = int(os.getenv("POLLING_MODE","0"))
-APP_BASE_URL = os.getenv("APP_BASE_URL","")
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH","/webhook")
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET","tmai_secret")
+POLLING_MODE = int(os.getenv("POLLING_MODE","1"))  # force polling here
+PORT = int(os.getenv("PORT","8080"))
 ADMIN_PANEL_TOKEN = os.getenv("ADMIN_PANEL_TOKEN","")
-BOT_USERNAME = os.getenv("BOT_USERNAME","TrustMeAI_bot")
+APP_BASE_URL = os.getenv("APP_BASE_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN",""))
+if APP_BASE_URL and not APP_BASE_URL.startswith("http"):
+    APP_BASE_URL = "https://" + APP_BASE_URL
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-log = logging.getLogger("trustmeai.adminui")
+log = logging.getLogger("trustmeai.polling_admin")
 
 def is_admin(uid:int)->bool:
     try: return ADMIN_CHAT_ID and int(uid)==int(ADMIN_CHAT_ID)
     except: return False
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"TrustMe AI — {VERSION}\nUse /admin to open the web panel.")
 
 async def version_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -35,11 +37,21 @@ async def ping_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("Admin only."); return
-    base = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN","")
-    if base and not base.startswith("http"): base = "https://" + base
-    url = (base.rstrip("/") if base else "") + "/admin?token=" + (os.getenv("ADMIN_PANEL_TOKEN",""))
+    base = APP_BASE_URL or "<set APP_BASE_URL>"
+    url = (base.rstrip("/") if base else "") + "/admin?token=" + (ADMIN_PANEL_TOKEN or "<set ADMIN_PANEL_TOKEN>")
     await update.message.reply_html(f"<b>Admin panel</b>\nOpen: {url}", disable_web_page_preview=True)
 
+def build_bot() -> Application:
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("version", version_cmd))
+    app.add_handler(CommandHandler("ping", ping_cmd))
+    app.add_handler(CommandHandler("admin", admin_cmd))
+    return app
+
+# --- aiohttp admin UI (served regardless of PTB version) ---
 def require_token(handler):
     async def inner(request: web.Request):
         token = request.query.get("token") or request.headers.get("x-admin-token") or ""
@@ -48,6 +60,9 @@ def require_token(handler):
         return await handler(request)
     return inner
 
+async def root_ok(request: web.Request):
+    return web.Response(text=f"TrustMe AI Bot OK (polling) — {VERSION}", content_type="text/plain")
+
 @require_token
 async def admin_home(request: web.Request):
     html = f"""<!doctype html>
@@ -55,72 +70,32 @@ async def admin_home(request: web.Request):
 <style>
 body{{font-family:system-ui,-apple-system,Segoe UI,Roboto;background:#0b0f14;color:#e6eef8;max-width:860px;margin:32px auto;padding:0 16px}}
 .card{{background:#111827;border:1px solid #1f2937;border-radius:12px;padding:16px;margin-bottom:16px}}
-button{{padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:#04131e;font-weight:700;cursor:pointer}}
-.muted{{color:#93a2b8}}
+code{{background:#0f172a;padding:2px 6px;border-radius:6px}}
+a{{color:#7dd3fc}}
 </style></head><body>
 <h1>TrustMe AI — Admin</h1>
-<div class="muted">Version {VERSION}</div>
 <div class="card">
-  <p>Web admin is live. We’ll add more controls next.</p>
+  <p>Polling mode admin is running. We’ll add more controls next.</p>
+  <p>Telegram commands: <code>/version</code>, <code>/ping</code>, <code>/admin</code></p>
 </div>
 </body></html>"""
     return web.Response(text=html, content_type="text/html")
 
-def build_app() -> Application:
-    if not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("version", version_cmd))
-    app.add_handler(CommandHandler("ping", ping_cmd))
-    app.add_handler(CommandHandler("admin", admin_cmd))
-    return app
+def start_admin_server():
+    app = web.Application()
+    app.router.add_get("/", root_ok)
+    app.router.add_get("/admin", admin_home)
+    web.run_app(app, host="0.0.0.0", port=PORT)
 
 def main():
-    global ADMIN_PANEL_TOKEN
-    if not ADMIN_PANEL_TOKEN:
-        ADMIN_PANEL_TOKEN = secrets.token_hex(16)
-        os.environ["ADMIN_PANEL_TOKEN"] = ADMIN_PANEL_TOKEN
-        print("ADMIN_PANEL_TOKEN (temporary):", ADMIN_PANEL_TOKEN)
+    # Start aiohttp web server on the main Railway port
+    t = threading.Thread(target=start_admin_server, daemon=True)
+    t.start()
 
-    app = build_app()
-
-    if POLLING_MODE:
-        log.info("Starting in polling mode...")
-        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
-        return
-
-    # webhook mode
-    base = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN","")
-    if base and not base.startswith("http"): base = "https://" + base
-    if not base:
-        raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
-    webhook_url = base.rstrip("/") + WEBHOOK_PATH
-
-    # Try PTB 21.x signature first (supports web_app)
-    try:
-        from telegram.ext import __version__ as PTB_VERSION
-    except Exception:
-        PTB_VERSION = "unknown"
-    log.info(f"python-telegram-bot version: {PTB_VERSION}")
-
-    try:
-        web_app = web.Application()
-        web_app.router.add_get("/", lambda r: web.Response(text="TrustMe AI Bot OK", content_type="text/plain"))
-        web_app.router.add_get("/admin", admin_home)
-
-        log.info("Starting webhook with admin UI (PTB21 path)...")
-        app.run_webhook(web_app=web_app, listen="0.0.0.0", port=int(os.getenv("PORT","8080")),
-                        url_path=WEBHOOK_PATH, webhook_url=webhook_url,
-                        secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=False)
-    except TypeError:
-        # PTB 20.x fallback: no web_app argument available.
-        log.warning("PTB 20.x detected. Admin UI disabled in webhook mode. Upgrade to PTB >=21 to enable /admin web.")
-        app.run_webhook(listen="0.0.0.0", port=int(os.getenv("PORT","8080")),
-                        url_path=WEBHOOK_PATH, webhook_url=webhook_url,
-                        secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
-                        drop_pending_updates=False)
+    # Run Telegram bot in polling mode (works on PTB 20.x without webhooks)
+    bot = build_bot()
+    log.info("Starting bot in polling mode with admin UI on /admin ...")
+    bot.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
 
 if __name__=="__main__":
     main()
