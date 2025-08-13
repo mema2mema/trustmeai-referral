@@ -1,4 +1,3 @@
-
 import os, json, csv, html
 from pathlib import Path
 
@@ -61,12 +60,3 @@ def decode_ref(code:str):
 def now_date_str():
     from datetime import datetime
     return datetime.utcnow().strftime('%Y-%m-%d')
-
-# ---------- Config helpers ----------
-def load_config(config_path: Path, defaults: dict) -> dict:
-    cfg = load_json(config_path, {})
-    merged = {**defaults, **cfg}
-    return merged
-
-def save_config(config_path: Path, cfg: dict):
-    save_json(config_path, cfg)

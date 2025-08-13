@@ -1,4 +1,3 @@
-
 import numpy as np, pandas as pd
 from .utils import safe_html
 
@@ -17,7 +16,6 @@ def summarize_df(df: pd.DataFrame)->dict:
 
 def build_summary_text(df: pd.DataFrame, meta: dict)->str:
     s=summarize_df(df); hints=[]
-    # Hints text may include '<' or '>' which must be HTML-escaped for Telegram
     if s['profit_factor']<1.2: hints.append('Low profit factor; tighten stops or improve entries.')
     if s['win_rate']<50: hints.append('Win rate < 50%; review trade quality and R:R.')
     if abs(s['max_drawdown'])>abs(s['net_pnl'])*0.6: hints.append('Drawdown is large vs profits; reduce size or diversify.')
