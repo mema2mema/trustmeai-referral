@@ -1,41 +1,65 @@
+import sys
 import os
+
+# Fix import paths
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import telebot
 import json
-import pandas as pd
-import requests
-from flask import Flask, request
+from utils.summary import generate_summary
+from utils.trade_log import generate_trade_log
+from utils.graph_generator import generate_graph
+from utils.wallet import get_balance
 
-app = Flask(__name__)
-CONFIG_PATH = "telegram_config.json"
-LOG_FILE = "logs/redhawk_trade_log.csv"
+# Load Telegram Config
+with open("telegram_bot/telegram_config.json", "r", encoding="utf-8") as f:
+    config = json.load(f)
 
-def load_config():
-    with open(CONFIG_PATH, "r") as f:
-        return json.load(f)
+BOT_TOKEN = config["bot_token"]
+bot = telebot.TeleBot(BOT_TOKEN)
 
-def send_message(text):
-    config = load_config()
-    token = config["bot_token"]
-    chat_id = config["chat_id"]
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = {"chat_id": chat_id, "text": text}
-    requests.post(url, data=data)
+# /start
+@bot.message_handler(commands=['start'])
+def start_handler(message):
+    bot.reply_to(message, "👋 Hello from TrustMe AI Telegram Bot!")
 
-@app.route(f"/{load_config()['bot_token']}", methods=["POST"])
-def webhook():
-    data = request.get_json()
-    if "message" in data:
-        msg = data["message"]
-        text = msg.get("text", "")
-        if text == "/log":
-            if os.path.exists(LOG_FILE):
-                df = pd.read_csv(LOG_FILE)
-                last_rows = df.tail(5).to_dict("records")
-                message = "📄 Last 5 Trades:\n"
-                for trade in last_rows:
-                    message += f"{trade['trade_id']} | {trade['outcome']} | {trade['pnl']} USDT\n"
-                send_message(message)
-            else:
-                send_message("❌ No trade log found.")
-        elif text == "/start":
-            send_message("👋 TrustMe AI Bot is live. Use /log to see latest trades.")
-    return "ok"
+# /summary
+@bot.message_handler(commands=['summary'])
+def summary_handler(message):
+    try:
+        summary = generate_summary()
+        bot.reply_to(message, f"📊 Trade Summary:\n{summary}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error in summary: {e}")
+
+# /log
+@bot.message_handler(commands=['log'])
+def log_handler(message):
+    try:
+        log = generate_trade_log()
+        bot.reply_to(message, f"📄 Recent Trade Log:\n{log}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error in log: {e}")
+
+# /balance
+@bot.message_handler(commands=['balance'])
+def balance_handler(message):
+    try:
+        balance = get_balance()
+        bot.reply_to(message, f"💰 Current Wallet Balance: {balance:.2f} USDT")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error in balance: {e}")
+
+# /graph
+@bot.message_handler(commands=['graph'])
+def graph_handler(message):
+    try:
+        image_path = generate_graph()
+        with open(image_path, "rb") as photo:
+            bot.send_photo(message.chat.id, photo)
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error generating graph: {e}")
+
+# Start polling
+print("✅ TrustMe AI Telegram Bot is now listening...")
+bot.polling(non_stop=True)
