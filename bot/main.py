@@ -1,17 +1,15 @@
 
 import os, logging, threading
-from pathlib import Path
 from dotenv import load_dotenv; load_dotenv()
 from aiohttp import web
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-VERSION = "v5.1.2-adminui-polling"
+VERSION = "v5.1.3-adminui-polling"
 
-# env
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID","")
-POLLING_MODE = int(os.getenv("POLLING_MODE","1"))  # force polling here
+POLLING_MODE = int(os.getenv("POLLING_MODE","1"))  # force polling
 PORT = int(os.getenv("PORT","8080"))
 ADMIN_PANEL_TOKEN = os.getenv("ADMIN_PANEL_TOKEN","")
 APP_BASE_URL = os.getenv("APP_BASE_URL", os.getenv("RAILWAY_PUBLIC_DOMAIN",""))
@@ -51,7 +49,7 @@ def build_bot() -> Application:
     app.add_handler(CommandHandler("admin", admin_cmd))
     return app
 
-# --- aiohttp admin UI (served regardless of PTB version) ---
+# --- aiohttp admin UI ---
 def require_token(handler):
     async def inner(request: web.Request):
         token = request.query.get("token") or request.headers.get("x-admin-token") or ""
@@ -85,14 +83,12 @@ def start_admin_server():
     app = web.Application()
     app.router.add_get("/", root_ok)
     app.router.add_get("/admin", admin_home)
-    web.run_app(app, host="0.0.0.0", port=PORT)
+    # IMPORTANT: disable signal handling because we're in a thread on Railway/Nixpacks
+    web.run_app(app, host="0.0.0.0", port=PORT, handle_signals=False)
 
 def main():
-    # Start aiohttp web server on the main Railway port
     t = threading.Thread(target=start_admin_server, daemon=True)
     t.start()
-
-    # Run Telegram bot in polling mode (works on PTB 20.x without webhooks)
     bot = build_bot()
     log.info("Starting bot in polling mode with admin UI on /admin ...")
     bot.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
