@@ -387,7 +387,9 @@ async def daily_report_job(context: CallbackContext):
         except Exception: pass
 
 async def monitor_trades_job(context: CallbackContext):
-    chat_ids = get_subscribers(); if not chat_ids: return
+    chat_ids = get_subscribers()
+    if not chat_ids:
+        return
     tracker = load_json(TRACKER_FILE, default={"last_line": 0}); last_line = tracker.get("last_line", 0)
     if not TRADES_PATH.exists(): return
     try:
