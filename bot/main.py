@@ -441,27 +441,25 @@ def build_application() -> Application:
     app.job_queue.run_repeating(daily_report_job, interval=3600, first=60)
     return app
 
-async def run_polling(app: Application):
-    log.info("Starting in polling mode...")
-    await app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
-
-async def run_webhook(app: Application):
-    port = int(os.getenv("PORT", "8080"))
-    base_url = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
-    if base_url and not base_url.startswith("http"): base_url = "https://" + base_url
-    if not base_url: raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
-    webhook_url = base_url.rstrip("/") + WEBHOOK_PATH
-    log.info(f"Starting webhook on 0.0.0.0:{port} webhook_url={webhook_url}")
-    await app.run_webhook(listen="0.0.0.0", port=port, webhook_url=webhook_url,
-                          secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
-                          drop_pending_updates=False)
-
+# (removed) async run_polling
+# (removed) async run_webhook
 def main():
     app = build_application()
     if POLLING_MODE:
-        asyncio.run(run_polling(app))
+        log.info("Starting in polling mode...")
+        app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=False)
     else:
-        asyncio.run(run_webhook(app))
+        port = int(os.getenv("PORT", "8080"))
+        base_url = APP_BASE_URL or os.getenv("RAILWAY_PUBLIC_DOMAIN", "")
+        if base_url and not base_url.startswith("http"):
+            base_url = "https://" + base_url
+        if not base_url:
+            raise RuntimeError("APP_BASE_URL or RAILWAY_PUBLIC_DOMAIN must be set for webhook mode")
+        webhook_url = base_url.rstrip("/") + WEBHOOK_PATH
+        log.info(f"Starting webhook on 0.0.0.0:{port} webhook_url={webhook_url}")
+        app.run_webhook(listen="0.0.0.0", port=port, webhook_url=webhook_url,
+                        secret_token=WEBHOOK_SECRET, allowed_updates=Update.ALL_TYPES,
+                        drop_pending_updates=False)
 
 if __name__ == "__main__":
     main()
