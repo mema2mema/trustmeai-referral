@@ -1,10 +1,6 @@
 
-# TrustMe AI Telegram Bot — v4.0.1 (adaptive)
-# - Tries PTB 21-style run_webhook(web_app=...)
-# - If TypeError (PTB 20.x), falls back to run_webhook(...) without web_app
-# - Telegram works either way; health page ("/") only on PTB 21+.
-
-import os, csv, json, logging
+# TrustMe AI Telegram Bot — v4.1.0 (admin tools + runtime settings + adaptive webhook)
+import os, io, csv, json, logging, zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -22,18 +18,20 @@ from telegram.ext import (
     CallbackContext, ContextTypes, filters
 )
 
+VERSION = "v4.1.0"
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")
 TRADES_PATH = Path(os.getenv("TRADES_PATH", "data/trades.csv"))
 STATE_DIR = Path(os.getenv("STATE_DIR", "state"))
 UPLOADS_DIR = Path(os.getenv("UPLOADS_DIR", "data/uploads"))
 POLLING_MODE = int(os.getenv("POLLING_MODE", "1"))
-JOB_INTERVAL_SECONDS = int(os.getenv("JOB_INTERVAL_SECONDS", "10"))
+DEFAULT_JOB_INTERVAL_SECONDS = int(os.getenv("JOB_INTERVAL_SECONDS", "10"))
 APP_BASE_URL = os.getenv("APP_BASE_URL", "")
 WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "tmai_secret")
-AUTO_REPORT_ON_TRADE = int(os.getenv("AUTO_REPORT_ON_TRADE", "1"))
-DAILY_REPORT_ENABLE = int(os.getenv("DAILY_REPORT_ENABLE", "1"))
+DEFAULT_AUTO_REPORT_ON_TRADE = int(os.getenv("AUTO_REPORT_ON_TRADE", "1"))
+DEFAULT_DAILY_REPORT_ENABLE = int(os.getenv("DAILY_REPORT_ENABLE", "1"))
 BOT_USERNAME = os.getenv("BOT_USERNAME", "your_bot_username")
 
 SUBSCRIBERS_FILE = STATE_DIR / "subscribers.json"
@@ -42,19 +40,32 @@ WALLET_FILE = STATE_DIR / "mock_wallet.json"
 WITHDRAWALS_FILE = STATE_DIR / "withdrawals.json"
 REFERRALS_FILE = STATE_DIR / "referrals.json"
 LAST_REPORT_FILE = STATE_DIR / "last_report.json"
+CONFIG_FILE = STATE_DIR / "config.json"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 log = logging.getLogger("trustmeai.bot")
+
 STATE_DIR.mkdir(parents=True, exist_ok=True)
 TRADES_PATH.parent.mkdir(parents=True, exist_ok=True)
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 from .utils import (
     load_json, save_json, read_csv_tail, parse_trades_csv, safe_html,
-    encode_ref, decode_ref, now_date_str
+    encode_ref, decode_ref, now_date_str, load_config, save_config
 )
 from .wallet import Wallet
 from .summary import build_summary_text
+
+# ----- Runtime config (editable by admin) -----
+DEFAULTS = {
+    "auto_report_on_trade": DEFAULT_AUTO_REPORT_ON_TRADE,
+    "daily_report_enable": DEFAULT_DAILY_REPORT_ENABLE,
+    "job_interval_seconds": DEFAULT_JOB_INTERVAL_SECONDS
+}
+CFG = load_config(CONFIG_FILE, DEFAULTS)
+
+def cfg_save():
+    save_config(CONFIG_FILE, CFG)
 
 # --- small HTTP for PTB21 ---
 async def health(request): return web.Response(text="TrustMe AI Bot OK", content_type="text/plain")
@@ -63,6 +74,12 @@ async def favicon(request): return web.Response(status=204)
 def admin_chat_id():
     try: return int(ADMIN_CHAT_ID) if ADMIN_CHAT_ID else None
     except: return None
+
+def is_admin(user_id: int) -> bool:
+    try:
+        return admin_chat_id() == int(user_id)
+    except:
+        return False
 
 def add_subscriber(chat_id: int):
     d = load_json(SUBSCRIBERS_FILE, {"subs": []})
@@ -126,17 +143,17 @@ def deny_withdrawal(wid:int):
     item=d["pending"].pop(idx); item["status"]="rejected"; d["history"].append(item); save_wd_data(d)
     return True,"Withdrawal denied.", item
 
-# ----- commands -----
-async def start(update, context):
+# ---------- Commands ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id=update.effective_chat.id; add_subscriber(chat_id)
     payload = ""
     if update.message and update.message.text:
         parts = update.message.text.split(maxsplit=1)
-        if len(parts)>1: payload=parts[1].strip()
+        if len(parts) > 1: payload = parts[1].strip()
     if payload.startswith("ref="): set_referrer(chat_id, payload.split("=",1)[1])
-    code=encode_ref(chat_id)
+    code = encode_ref(chat_id)
     await update.message.reply_html(
-        "<b>TrustMe AI Bot — v4.0.1</b>\n\n"
+        f"<b>TrustMe AI Bot — {VERSION}</b>\n\n"
         "You're subscribed to real-time trade alerts.\n\n"
         "<b>Key commands</b>\n"
         "/summary — performance summary\n"
@@ -149,11 +166,15 @@ async def start(update, context):
         "/withdraw 50 — request withdraw (admin approval)\n"
         "/referral — your link + stats\n"
         "/leaderboard — top referrers\n"
+        "/ping — quick health\n"
+        "/version — show version\n"
         "Upload a .csv to analyze it instantly.\n\n"
         f"Your referral code: <code>{code}</code>"
     )
 
 async def help_cmd(update, context): await start(update, context)
+async def ping_cmd(update, context): await update.message.reply_text("pong")
+async def version_cmd(update, context): await update.message.reply_text(VERSION)
 
 async def subscribe(update, context): add_subscriber(update.effective_chat.id); await update.message.reply_html("✅ Subscribed.")
 async def unsubscribe(update, context): remove_subscriber(update.effective_chat.id); await update.message.reply_html("🚫 Unsubscribed.")
@@ -161,7 +182,9 @@ async def unsubscribe(update, context): remove_subscriber(update.effective_chat.
 async def status(update, context):
     subs=len(get_subscribers())
     await update.message.reply_html(
-        f"<b>Status</b>\nSubscribers: {subs}\nFile: <code>{TRADES_PATH}</code>\nMode: {'Webhook' if not POLLING_MODE else 'Polling'}"
+        f"<b>Status</b>\nSubscribers: {subs}\nFile: <code>{TRADES_PATH}</code>\nMode: {'Webhook' if not POLLING_MODE else 'Polling'}\n"
+        f"Auto-report on trade: <b>{CFG['auto_report_on_trade']}</b>\nDaily report: <b>{CFG['daily_report_enable']}</b>\n"
+        f"Monitor interval (s): <b>{CFG['job_interval_seconds']}</b>"
     )
 
 async def log_cmd(update, context):
@@ -271,6 +294,85 @@ async def handle_document(update, context):
     except Exception as e:
         await update.message.reply_text(f"Analyze failed: {e}")
 
+# -------- Admin-only utilities --------
+async def broadcast_cmd(update, context):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("Admin only."); return
+    msg = " ".join(context.args).strip()
+    if not msg:
+        await update.message.reply_text("Usage: /broadcast your message"); return
+    subs = get_subscribers()
+    n=0
+    for cid in subs:
+        try:
+            await context.bot.send_message(chat_id=cid, text=msg, parse_mode=None)
+            n+=1
+        except Exception:
+            pass
+    await update.message.reply_text(f"Broadcast sent to {n} subscribers.")
+
+async def export_cmd(update, context):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("Admin only."); return
+    # bundle state files
+    files = [
+        SUBSCRIBERS_FILE, WALLET_FILE, WITHDRAWALS_FILE, REFERRALS_FILE,
+        LAST_REPORT_FILE, TRACKER_FILE, TRADES_PATH
+    ]
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for p in files:
+            try:
+                if p and Path(p).exists():
+                    z.write(p, arcname=p.name)
+            except Exception:
+                pass
+    buf.seek(0)
+    await update.message.reply_document(document=InputFile(buf, filename="trustmeai-state-export.zip"))
+
+async def set_cmd(update, context):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        await update.message.reply_text("Admin only."); return
+    if not context.args:
+        await update.message.reply_text("Usage:\n/set autoreport on|off\n/set daily on|off\n/set interval <seconds>"); return
+    subcmd = context.args[0].lower()
+    global monitor_job
+    if subcmd == "autoreport" and len(context.args)>=2:
+        val = context.args[1].lower() in ("1","on","true","yes")
+        CFG["auto_report_on_trade"] = 1 if val else 0; cfg_save()
+        await update.message.reply_text(f"auto_report_on_trade = {CFG['auto_report_on_trade']}")
+    elif subcmd == "daily" and len(context.args)>=2:
+        val = context.args[1].lower() in ("1","on","true","yes")
+        CFG["daily_report_enable"] = 1 if val else 0; cfg_save()
+        await update.message.reply_text(f"daily_report_enable = {CFG['daily_report_enable']}")
+    elif subcmd == "interval" and len(context.args)>=2:
+        try:
+            sec = int(context.args[1]); 
+            if sec < 5 or sec > 3600:
+                await update.message.reply_text("interval must be between 5 and 3600 seconds"); return
+            CFG["job_interval_seconds"] = sec; cfg_save()
+            # reschedule monitor job
+            try:
+                if monitor_job is not None:
+                    monitor_job.schedule_removal()
+            except Exception:
+                pass
+            monitor_job = update.application.job_queue.run_repeating(monitor_trades_job, interval=sec, first=5)
+            await update.message.reply_text(f"monitor interval set to {sec}s")
+        except:
+            await update.message.reply_text("interval must be an integer seconds value")
+    else:
+        await update.message.reply_text("Unknown setting. Use: autoreport|daily|interval")
+
+def get_cfg_flag(name: str, default: int) -> int:
+    try:
+        return int(CFG.get(name, default))
+    except:
+        return default
+
 def generate_report_files():
     if not TRADES_PATH.exists(): return None,None
     try:
@@ -279,7 +381,7 @@ def generate_report_files():
             start=float(os.getenv("START_EQUITY","1000")); df["equity"]=start+df["pnl"].cumsum()
         fig=STATE_DIR/"equity.png"
         plt.figure(); plt.plot(df["timestamp"], df["equity"]); plt.title("Equity Curve"); plt.xlabel("Time"); plt.ylabel("Equity"); plt.xticks(rotation=30); plt.tight_layout(); plt.savefig(fig, dpi=150); plt.close()
-        txt=STATE_DIR/"performance-report.txt"; txt.write_text(build_summary_text(df,meta), encoding="utf-8")
+        txt=STATE_DIR/"performance-report.txt"; txt.write_text(build_summary_text(df,meta), encoding='utf-8')
         return txt, fig
     except Exception: return None,None
 
@@ -295,7 +397,7 @@ async def send_report(context:CallbackContext, chat_ids=None, title_prefix="Auto
         except: pass
 
 async def daily_report_job(context:CallbackContext):
-    if not DAILY_REPORT_ENABLE: return
+    if not get_cfg_flag("daily_report_enable", DEFAULT_DAILY_REPORT_ENABLE): return
     today=now_date_str(); last=load_json(LAST_REPORT_FILE, {"date":""}).get("date","")
     if last==today: return
     if TRADES_PATH.exists():
@@ -308,6 +410,10 @@ async def monitor_trades_job(context:CallbackContext):
     chat_ids=get_subscribers()
     if not chat_ids:
         return
+    if not get_cfg_flag("auto_report_on_trade", DEFAULT_AUTO_REPORT_ON_TRADE):
+        auto_report=False
+    else:
+        auto_report=True
     tracker=load_json(TRACKER_FILE, {"last_line":0}); last=tracker.get("last_line",0)
     if not TRADES_PATH.exists(): return
     try:
@@ -332,13 +438,18 @@ async def monitor_trades_job(context:CallbackContext):
                 try: await context.bot.send_message(chat_id=cid, text=text, parse_mode=ParseMode.HTML)
                 except: pass
         tracker["last_line"]=total; save_json(TRACKER_FILE, tracker)
-        if AUTO_REPORT_ON_TRADE: await send_report(context, title_prefix="Auto")
+        if auto_report: await send_report(context, title_prefix="Auto")
+
+monitor_job = None
+daily_job = None
 
 def build_application() -> Application:
     if not TELEGRAM_BOT_TOKEN: raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("ping", ping_cmd))
+    app.add_handler(CommandHandler("version", version_cmd))
     app.add_handler(CommandHandler("subscribe", subscribe))
     app.add_handler(CommandHandler("unsubscribe", unsubscribe))
     app.add_handler(CommandHandler("status", status))
@@ -350,11 +461,15 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("withdraw", withdraw_cmd))
     app.add_handler(CommandHandler("referral", referral_cmd))
     app.add_handler(CommandHandler("leaderboard", leaderboard_cmd))
+    app.add_handler(CommandHandler("broadcast", broadcast_cmd))
+    app.add_handler(CommandHandler("export", export_cmd))
+    app.add_handler(CommandHandler("set", set_cmd))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(callback_handler))
     if app.job_queue is None: raise RuntimeError("Install python-telegram-bot[job-queue]")
-    app.job_queue.run_repeating(monitor_trades_job, interval=JOB_INTERVAL_SECONDS, first=5)
-    app.job_queue.run_repeating(daily_report_job, interval=3600, first=60)
+    global monitor_job, daily_job
+    monitor_job = app.job_queue.run_repeating(monitor_trades_job, interval=int(CFG["job_interval_seconds"]), first=5)
+    daily_job = app.job_queue.run_repeating(daily_report_job, interval=3600, first=60)
     return app
 
 def main():
