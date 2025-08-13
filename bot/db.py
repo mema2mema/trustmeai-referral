@@ -1,79 +1,144 @@
-import os
-DB_URL = os.getenv("DATABASE_URL", "").strip()
-conn = None
 
-def _connect():
-    global conn
-    if not DB_URL:
-        return None
-    if conn is not None:
-        return conn
-    try:
-        import psycopg2
-        conn = psycopg2.connect(DB_URL, sslmode="require" if "sslmode" not in DB_URL and DB_URL.startswith("postgres") else None)
-        _init_schema(conn)
-        return conn
-    except Exception as e:
-        print("DB connect failed:", e)
-        return None
+import os, time, datetime, threading
+from dataclasses import dataclass
+from typing import Optional, List, Tuple
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 
-def _init_schema(c):
-    cur=c.cursor()
-    cur.execute("""CREATE TABLE IF NOT EXISTS subscribers (chat_id BIGINT PRIMARY KEY, joined_at TIMESTAMP DEFAULT NOW());
-CREATE TABLE IF NOT EXISTS trades (
-    id BIGSERIAL PRIMARY KEY,
-    ts TIMESTAMP,
-    symbol TEXT, side TEXT, qty DOUBLE PRECISION, price DOUBLE PRECISION, pnl DOUBLE PRECISION
-);
-CREATE TABLE IF NOT EXISTS wallet (user_id BIGINT PRIMARY KEY, balance DOUBLE PRECISION DEFAULT 0);
-CREATE TABLE IF NOT EXISTS withdrawals (
-    id BIGSERIAL PRIMARY KEY, user_id BIGINT, amount DOUBLE PRECISION, ts TIMESTAMP, status TEXT
-);
-CREATE TABLE IF NOT EXISTS referrals (
-    user_id BIGINT PRIMARY KEY, referrer BIGINT, joined_at TIMESTAMP
-);
-""")
-    c.commit()
+_DB_LOCK = threading.Lock()
+_ENGINE: Optional[Engine] = None
 
-def add_subscriber(chat_id:int):
-    c=_connect(); 
-    if not c: return
-    try:
-        cur=c.cursor(); cur.execute("INSERT INTO subscribers(chat_id) VALUES(%s) ON CONFLICT DO NOTHING;", (chat_id,)); c.commit()
-    except Exception: c.rollback()
+def get_db_url() -> str:
+    url = os.getenv("DATABASE_URL", "").strip()
+    if not url:
+        # local fallback
+        os.makedirs("data", exist_ok=True)
+        return "sqlite:///data/trustmeai.db"
+    # normalize for SQLAlchemy psycopg: convert postgres:// to postgresql+psycopg://
+    if url.startswith("postgres://"):
+        url = "postgresql+psycopg://" + url.split("://",1)[1]
+    elif url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url.split("://",1)[1]
+    elif url.startswith("postgresql+psycopg://"):
+        pass
+    return url
 
-def remove_subscriber(chat_id:int):
-    c=_connect(); 
-    if not c: return
-    try:
-        cur=c.cursor(); cur.execute("DELETE FROM subscribers WHERE chat_id=%s;", (chat_id,)); c.commit()
-    except Exception: c.rollback()
+def engine() -> Engine:
+    global _ENGINE
+    with _DB_LOCK:
+        if _ENGINE is None:
+            _ENGINE = create_engine(get_db_url(), pool_pre_ping=True, future=True)
+            init_db(_ENGINE)
+    return _ENGINE
 
-def insert_trade(ts, symbol, side, qty, price, pnl):
-    c=_connect(); 
-    if not c: return
-    try:
-        cur=c.cursor(); cur.execute("INSERT INTO trades(ts,symbol,side,qty,price,pnl) VALUES(%s,%s,%s,%s,%s,%s);",
-            (ts, symbol, side, qty, price, pnl)); c.commit()
-    except Exception: c.rollback()
+def init_db(e: Engine):
+    with e.begin() as conn:
+        conn.exec_driver_sql("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            tg_id BIGINT UNIQUE NOT NULL,
+            username TEXT,
+            balance_cents BIGINT NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+        """)
+        conn.exec_driver_sql("""
+        CREATE TABLE IF NOT EXISTS withdrawals (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            amount_cents BIGINT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending', -- pending, approved, rejected
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            decided_at TIMESTAMP NULL
+        );
+        """)
 
-def wallet_set(user_id:int, balance:float):
-    c=_connect(); 
-    if not c: return
-    try:
-        cur=c.cursor(); cur.execute("INSERT INTO wallet(user_id,balance) VALUES(%s,%s) ON CONFLICT(user_id) DO UPDATE SET balance=EXCLUDED.balance;", (user_id,balance)); c.commit()
-    except Exception: c.rollback()
+# Helpers
+def get_or_create_user(tg_id: int, username: Optional[str]) -> Tuple[int, int]:
+    """
+    Returns (user_id, balance_cents)
+    """
+    e = engine()
+    with e.begin() as conn:
+        row = conn.execute(text("SELECT id, balance_cents FROM users WHERE tg_id=:tg_id"),
+                           {"tg_id": tg_id}).first()
+        if row:
+            return row[0], int(row[1])
+        res = conn.execute(text("INSERT INTO users (tg_id, username) VALUES (:tg_id, :username) RETURNING id, balance_cents"),
+                           {"tg_id": tg_id, "username": username})
+        r = res.first()
+        return r[0], int(r[1])
 
-def withdrawal_add(user_id:int, amount:float, ts, status:str):
-    c=_connect(); 
-    if not c: return
-    try:
-        cur=c.cursor(); cur.execute("INSERT INTO withdrawals(user_id,amount,ts,status) VALUES(%s,%s,%s,%s);", (user_id,amount,ts,status)); c.commit()
-    except Exception: c.rollback()
+def get_balance(tg_id:int)->int:
+    e = engine()
+    with e.begin() as conn:
+        row = conn.execute(text("SELECT balance_cents FROM users WHERE tg_id=:tg_id"), {"tg_id": tg_id}).first()
+        return int(row[0]) if row else 0
 
-def referral_set(user_id:int, referrer:int, joined_at):
-    c=_connect();
-    if not c: return
-    try:
-        cur=c.cursor(); cur.execute("INSERT INTO referrals(user_id,referrer,joined_at) VALUES(%s,%s,%s) ON CONFLICT(user_id) DO UPDATE SET referrer=EXCLUDED.referrer;", (user_id,referrer,joined_at)); c.commit()
-    except Exception: c.rollback()
+def add_deposit(tg_id:int, amount_cents:int)->int:
+    e = engine()
+    with e.begin() as conn:
+        # ensure user exists
+        conn.execute(text("INSERT INTO users (tg_id) VALUES (:tg_id) ON CONFLICT (tg_id) DO NOTHING"), {"tg_id": tg_id})
+        conn.execute(text("UPDATE users SET balance_cents = balance_cents + :amt WHERE tg_id=:tg_id"),
+                     {"amt": amount_cents, "tg_id": tg_id})
+        row = conn.execute(text("SELECT balance_cents FROM users WHERE tg_id=:tg_id"), {"tg_id": tg_id}).first()
+        return int(row[0])
+
+def request_withdrawal(tg_id:int, amount_cents:int) -> Tuple[int, int]:
+    """
+    Creates a pending withdrawal if balance is enough. Returns (withdrawal_id, new_balance_cents).
+    Raises ValueError if insufficient.
+    """
+    e = engine()
+    with e.begin() as conn:
+        u = conn.execute(text("SELECT id, balance_cents FROM users WHERE tg_id=:tg_id FOR UPDATE"),
+                         {"tg_id": tg_id}).first()
+        if not u:
+            # auto create
+            conn.execute(text("INSERT INTO users (tg_id) VALUES (:tg_id)"), {"tg_id": tg_id})
+            u = conn.execute(text("SELECT id, balance_cents FROM users WHERE tg_id=:tg_id FOR UPDATE"),
+                             {"tg_id": tg_id}).first()
+        uid, bal = int(u[0]), int(u[1])
+        if bal < amount_cents:
+            raise ValueError("Insufficient balance")
+        conn.execute(text("UPDATE users SET balance_cents = balance_cents - :amt WHERE id=:uid"),
+                     {"amt": amount_cents, "uid": uid})
+        res = conn.execute(text("""
+            INSERT INTO withdrawals (user_id, amount_cents, status)
+            VALUES (:uid, :amt, 'pending') RETURNING id
+        """), {"uid": uid, "amt": amount_cents})
+        wid = int(res.first()[0])
+        nb = conn.execute(text("SELECT balance_cents FROM users WHERE id=:uid"), {"uid": uid}).first()[0]
+        return wid, int(nb)
+
+def list_pending_withdrawals(limit:int=50):
+    e = engine()
+    with e.begin() as conn:
+        rows = conn.exec_driver_sql("""
+            SELECT w.id, u.tg_id, u.username, w.amount_cents, w.created_at
+            FROM withdrawals w
+            JOIN users u ON u.id = w.user_id
+            WHERE w.status='pending'
+            ORDER BY w.created_at ASC
+            LIMIT :lim
+        """, {"lim": limit}).fetchall()
+        return [{
+            "id": int(r[0]), "tg_id": int(r[1]), "username": r[2],
+            "amount_cents": int(r[3]), "created_at": str(r[4])
+        } for r in rows]
+
+def set_withdrawal_status(wid:int, status:str):
+    e = engine()
+    with e.begin() as conn:
+        conn.exec_driver_sql("""
+            UPDATE withdrawals SET status=:s, decided_at=NOW() WHERE id=:wid
+        """, {"s": status, "wid": wid})
+
+def get_user_id_for_withdrawal(wid:int)->Optional[int]:
+    e = engine()
+    with e.begin() as conn:
+        r = conn.exec_driver_sql("""
+            SELECT u.tg_id FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE w.id=:wid
+        """, {"wid": wid}).first()
+        return int(r[0]) if r else None

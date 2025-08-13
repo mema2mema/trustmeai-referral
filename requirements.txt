@@ -1,3 +1,5 @@
 python-telegram-bot==20.7
 aiohttp==3.9.5
 python-dotenv==1.0.1
+SQLAlchemy==2.0.31
+psycopg[binary]==3.1.18
