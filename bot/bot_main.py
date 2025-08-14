@@ -6,7 +6,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from db import ensure_user, find_user, set_user_role, adjust_user_balance, update_withdrawal_status, log_action
+from .db import ensure_user, find_user, set_user_role, adjust_user_balance, update_withdrawal_status, log_action
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("trustmeai.bot")
@@ -64,13 +64,13 @@ Wins: <b>{wins}</b> • Losses: <b>{losses}</b>""")
         await update.message.reply_text("No trades file found.")
 
 async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import html
     try:
         with open(TRADES_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-16:]
+            lines = f.readlines()[-16:]  # header + 15 rows
         text = "".join(lines)
-        # use MarkdownV2 fenced code
-        text = text.replace("`", "\`")  # naive esc
-        await update.message.reply_text(f"```\n{text}\n```", parse_mode="MarkdownV2")
+        safe = html.escape(text)
+        await update.message.reply_html(f"<pre><code>{safe}</code></pre>")
     except FileNotFoundError:
         await update.message.reply_text("No trades file found.")
 
