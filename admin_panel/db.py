@@ -172,6 +172,15 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals(status);
 
 -- Audit logs
+/*BACKFILL_TG_ID*/
+-- Backfill legacy tg_id if the column exists
+DO $$ BEGIN
+IF EXISTS (
+  SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='tg_id'
+) THEN
+  UPDATE users SET tg_id = COALESCE(tg_id, tg_user_id);
+END IF; END $$;
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGSERIAL PRIMARY KEY,
   actor TEXT,

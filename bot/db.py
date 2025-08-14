@@ -172,6 +172,15 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals(status);
 
 -- Audit logs
+/*BACKFILL_TG_ID*/
+-- Backfill legacy tg_id if the column exists
+DO $$ BEGIN
+IF EXISTS (
+  SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='tg_id'
+) THEN
+  UPDATE users SET tg_id = COALESCE(tg_id, tg_user_id);
+END IF; END $$;
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGSERIAL PRIMARY KEY,
   actor TEXT,
@@ -185,3 +194,106 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     with db_cursor() as cur:
         cur.execute(sql)
     return True
+
+import psycopg2.errors
+
+def ensure_users_schema():
+    """Ensure required columns/constraints exist (idempotent)."""
+    migrate_schema()
+
+def _safe_select_user_by_tg(cur, tg_user_id):
+    try:
+        cur.execute("SELECT id, tg_user_id, username, full_name, role, balance FROM users WHERE tg_user_id=%s", (tg_user_id,))
+        return cur.fetchone()
+    except psycopg2.errors.UndefinedColumn:
+        # Heal schema and retry once
+        cur.connection.rollback()
+        migrate_schema()
+        cur.execute("SELECT id, tg_user_id, username, full_name, role, balance FROM users WHERE tg_user_id=%s", (tg_user_id,))
+        return cur.fetchone()
+
+def ensure_user(tg_user_id: int, username: str = None, full_name: str = None):
+    with db_cursor() as cur:
+        row = _safe_select_user_by_tg(cur, tg_user_id)
+        if row:
+            return row
+        try:
+            cur.execute(
+                "INSERT INTO users (tg_user_id, username, full_name) VALUES (%s,%s,%s) RETURNING id, tg_user_id, username, full_name, role, balance",
+                (tg_user_id, username, full_name)
+            )
+            return cur.fetchone()
+        except psycopg2.errors.UndefinedColumn:
+            cur.connection.rollback()
+            migrate_schema()
+            cur.execute(
+                "INSERT INTO users (tg_user_id, username, full_name) VALUES (%s,%s,%s) RETURNING id, tg_user_id, username, full_name, role, balance",
+                (tg_user_id, username, full_name)
+            )
+            return cur.fetchone()
+
+def find_user(identifier: str):
+    with db_cursor() as cur:
+        try:
+            if identifier.isdigit():
+                cur.execute("SELECT * FROM users WHERE tg_user_id=%s", (int(identifier),))
+            else:
+                handle = identifier.lstrip('@')
+                cur.execute("SELECT * FROM users WHERE username ILIKE %s", (handle,))
+            return cur.fetchone()
+        except psycopg2.errors.UndefinedColumn:
+            cur.connection.rollback()
+            migrate_schema()
+            if identifier.isdigit():
+                cur.execute("SELECT * FROM users WHERE tg_user_id=%s", (int(identifier),))
+            else:
+                handle = identifier.lstrip('@')
+                cur.execute("SELECT * FROM users WHERE username ILIKE %s", (handle,))
+            return cur.fetchone()
+
+def _has_column(cur, table: str, column: str) -> bool:
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns WHERE table_name=%s AND column_name=%s",
+        (table, column),
+    )
+    return cur.fetchone() is not None
+
+def ensure_user(tg_user_id: int, username: str = None, full_name: str = None):
+    with db_cursor() as cur:
+        row = _safe_select_user_by_tg(cur, tg_user_id)
+        if row:
+            return row
+        # Determine column set dynamically (support legacy 'tg_id' NOT NULL)
+        cols = ["tg_user_id", "username", "full_name"]
+        vals = [tg_user_id, username, full_name]
+        if _has_column(cur, "users", "tg_id"):
+            # insert both columns with same value to satisfy NOT NULL
+            cols = ["tg_user_id", "tg_id", "username", "full_name"]
+            vals = [tg_user_id, tg_user_id, username, full_name]
+        cols_list = ",".join(cols)
+        placeholders = ",".join(["%s"] * len(vals))
+        try:
+            cur.execute(
+                f"INSERT INTO users ({cols_list}) VALUES ({placeholders}) "
+                "RETURNING id, tg_user_id, username, full_name, role, balance",
+                tuple(vals),
+            )
+            return cur.fetchone()
+        except psycopg2.errors.UndefinedColumn:
+            cur.connection.rollback()
+            migrate_schema()
+            # retry once
+            if _has_column(cur, "users", "tg_id"):
+                cols = ["tg_user_id", "tg_id", "username", "full_name"]
+                vals = [tg_user_id, tg_user_id, username, full_name]
+            else:
+                cols = ["tg_user_id", "username", "full_name"]
+                vals = [tg_user_id, username, full_name]
+            cols_list = ",".join(cols)
+            placeholders = ",".join(["%s"] * len(vals))
+            cur.execute(
+                f"INSERT INTO users ({cols_list}) VALUES ({placeholders}) "
+                "RETURNING id, tg_user_id, username, full_name, role, balance",
+                tuple(vals),
+            )
+            return cur.fetchone()
