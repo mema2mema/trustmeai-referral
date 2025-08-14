@@ -120,6 +120,20 @@
         });
         const data = await res.json();
         document.getElementById('authResult').textContent = JSON.stringify(data, null, 2);
+        if (data.ok && data.token) {
+          localStorage.setItem('jwt', data.token);
+          // Check role to decide redirect
+          fetch('/me', { headers: { 'Authorization': 'Bearer ' + data.token }})
+            .then(r => r.json())
+            .then(m => {
+              if (m.profile && (m.profile.role === 'admin' || m.profile.role === 'manager')) {
+                window.location.href = '/admin.html';
+              } else {
+                window.location.href = '/dashboard.html';
+              }
+            })
+            .catch(() => window.location.href = '/dashboard.html');
+        }
       } catch (e) {
         document.getElementById('authResult').textContent = 'Auth error: ' + e.message;
       }

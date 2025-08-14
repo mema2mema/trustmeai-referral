@@ -1,0 +1,262 @@
+
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TrustMe AI — Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { theme: { extend: { colors: { brand: "#6C5CE7" }}}}</script>
+
+  <style>
+    .toast{position:fixed;right:1rem;bottom:1rem;background:#0ea5e9;color:#fff;padding:.75rem 1rem;border-radius:.75rem;box-shadow:0 10px 20px rgba(0,0,0,.35);opacity:0;transform:translateY(10px);transition:all .25s}
+    .toast.show{opacity:1;transform:translateY(0)}
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100">
+  <div class="max-w-6xl mx-auto p-4">
+    <header class="flex items-center justify-between py-4">
+      <a href="/dashboard.html" class="text-xl font-bold">TrustMe <span class="text-brand">AI</span> — Admin</a>
+      <div class="flex items-center gap-3 text-sm">
+        <a href="/" class="text-slate-300 hover:text-white">Home</a>
+        <button id="logout" class="text-slate-300 hover:text-white">Logout</button>
+      </div>
+    </header>
+
+    <div id="notAdmin" class="hidden p-4 rounded-xl border border-red-500/40 bg-red-500/10 text-red-200">
+      You are not an admin. Please login with an admin account.
+    </div>
+
+    <section id="summary" class="mt-4 grid md:grid-cols-3 gap-4">
+      <div class="p-4 rounded-xl border border-slate-800">
+        <div class="text-slate-400 text-sm">Users</div>
+        <div id="usersCount" class="text-2xl font-extrabold">—</div>
+      </div>
+      <div class="p-4 rounded-xl border border-slate-800">
+        <div class="text-slate-400 text-sm">Pending Withdrawals</div>
+        <div id="pendingCount" class="text-2xl font-extrabold">—</div>
+      </div>
+      <div class="p-4 rounded-xl border border-slate-800">
+        <div class="text-slate-400 text-sm">Total Balances</div>
+        <div id="totalBalances" class="text-2xl font-extrabold">—</div>
+      </div>
+    </section>
+
+    <section class="mt-10">
+      <h2 class="text-xl font-semibold">Withdrawals</h2><div class="mt-2 text-sm"><a id="exW" class="underline text-slate-300" href="#">Export CSV</a></div>
+      <div class="mt-3">
+        <select id="status" class="p-2 rounded-lg bg-slate-900 border border-slate-800">
+          <option value="">All</option>
+          <option>pending</option>
+          <option>approved</option>
+          <option>denied</option>
+        </select>
+        <button id="reloadW" class="ml-2 px-3 py-2 rounded-lg bg-brand">Reload</button>
+      </div>
+      <div id="wdTable" class="mt-3 overflow-x-auto"></div>
+    </section>
+
+    <section class="mt-10">
+      <h2 class="text-xl font-semibold">Users & Roles</h2><div class="mt-2 text-sm"><a id="exU" class="underline text-slate-300" href="#">Export CSV</a></div>
+      <div id="usersTable" class="mt-3 overflow-x-auto"></div>
+    </section>
+
+    <section class="mt-10 mb-20">
+      <h2 class="text-xl font-semibold">Audit Logs</h2><div class="mt-2 text-sm"><a id="exL" class="underline text-slate-300" href="#">Export CSV</a></div>
+      <div id="logsTable" class="mt-3 overflow-x-auto"></div>
+    </section>
+  </div>
+
+  <script>
+    const token = localStorage.getItem('jwt');
+    if (!token) location.href='/';
+
+    async function api(path, options={}) {
+      const res = await fetch(path, { ...options, headers: { 'Authorization': 'Bearer ' + token, 'Content-Type':'application/json', ...(options.headers||{}) }});
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    document.getElementById('logout').onclick = () => { localStorage.removeItem('jwt'); location.href='/'; };
+
+    async function ensureAdmin() {
+      const me = await api('/me');
+      if (!['admin','manager'].includes(me.profile.role)) {
+        document.getElementById('notAdmin').classList.remove('hidden');
+        throw new Error('not admin');
+      }
+    }
+
+    function table(headers, rows) {
+      return \`
+        <table class="w-full text-sm">
+          <thead><tr class="text-slate-400">\${headers.map(h=>'<th class="px-3 py-2 text-left">'+h+'</th>').join('')}</tr></thead>
+          <tbody>\${rows.join('')}</tbody>
+        </table>\`;
+    }
+
+    async function loadSummary() {
+      const s = await api('/admin/summary');
+      document.getElementById('usersCount').textContent = s.users;
+      document.getElementById('pendingCount').textContent = s.pending_withdrawals;
+      document.getElementById('totalBalances').textContent = s.total_balances;
+    }
+
+    async function loadWithdrawals() {
+      const status = document.getElementById('status').value;
+      const r = await api('/admin/withdrawals' + (status ? ('?status='+status) : ''));
+      const rows = r.items.map(w => \`
+        <tr class="border-b border-slate-800">
+          <td class="px-3 py-2">\${w.id}</td>
+          <td class="px-3 py-2">\${w.user_id}</td>
+          <td class="px-3 py-2">\${w.amount}</td>
+          <td class="px-3 py-2">\${w.network}</td>
+          <td class="px-3 py-2">\${w.status}</td>
+          <td class="px-3 py-2 text-xs">\${w.requested_at}</td>
+          <td class="px-3 py-2">\${w.txid || ''}</td>
+          <td class="px-3 py-2">
+            <input placeholder="txid" class="p-2 rounded bg-slate-900 border border-slate-800 w-48" id="tx_\${w.id}"/>
+            <button class="ml-2 px-3 py-2 rounded bg-emerald-600" onclick="approve(\${w.id})">Approve</button>
+            <button class="ml-2 px-3 py-2 rounded bg-rose-600" onclick="deny(\${w.id})">Deny</button>
+          </td>
+        </tr>\`);
+      document.getElementById('wdTable').innerHTML = table(['ID','User','Amount','Net','Status','Requested','TXID','Actions'], rows);
+    }
+
+    async function approve(id) {
+      const txid = document.getElementById('tx_'+id).value || null;
+      await api('/admin/withdrawals/'+id+'/approve', { method:'POST', body: JSON.stringify({ txid })});
+      await loadWithdrawals();
+      await loadSummary();
+    }
+
+    async function deny(id) {
+      const note = prompt('Reason?') || 'Denied';
+      await api('/admin/withdrawals/'+id+'/deny', { method:'POST', body: JSON.stringify({ note })});
+      await loadWithdrawals();
+      await loadSummary();
+    }
+
+    async function loadUsers() {
+      const r = await api('/admin/users');
+      const rows = r.items.map(u => \`
+        <tr class="border-b border-slate-800">
+          <td class="px-3 py-2">\${u.id}</td>
+          <td class="px-3 py-2">\${u.tg_user_id || u.tg_id}</td>
+          <td class="px-3 py-2">\${u.username || ''}</td>
+          <td class="px-3 py-2">\${u.full_name || ''}</td>
+          <td class="px-3 py-2">\${u.role}</td>
+          <td class="px-3 py-2">\${u.balance}</td>
+          <td class="px-3 py-2">
+            <select id="role_\${u.id}" class="p-2 rounded bg-slate-900 border border-slate-800">
+              <option \${u.role==='admin'?'selected':''}>admin</option>
+              <option \${u.role==='manager'?'selected':''}>manager</option>
+              <option \${u.role==='support'?'selected':''}>support</option>
+              <option \${u.role==='user'?'selected':''}>user</option>
+            </select>
+            <button class="ml-2 px-3 py-2 rounded bg-slate-700" onclick="setRole(\${u.id})">Save</button>
+          </td>
+          <td class="px-3 py-2">
+            <input type="number" step="0.01" placeholder="Amount" class="p-2 rounded bg-slate-900 border border-slate-800 w-28" id="amt_\${u.id}">
+            <select id="mode_\${u.id}" class="p-2 rounded bg-slate-900 border border-slate-800">
+              <option>get</option><option>set</option><option>add</option><option>sub</option>
+            </select>
+            <button class="ml-2 px-3 py-2 rounded bg-slate-700" onclick="doBalance(\${u.id})">Go</button>
+          </td>
+        </tr>\`);
+      document.getElementById('usersTable').innerHTML = table(['ID','TG','Username','Name','Role','Balance','Role Change','Balance Ops'], rows);
+    }
+
+    async function setRole(uid) {
+      const role = document.getElementById('role_'+uid).value;
+      await api('/admin/users/'+uid+'/role', { method:'POST', body: JSON.stringify({ role })});
+      await loadUsers();
+    }
+
+    async function doBalance(uid) {
+      const amount = parseFloat(document.getElementById('amt_'+uid).value || '0');
+      const mode = document.getElementById('mode_'+uid).value;
+      const res = await api('/admin/users/'+uid+'/balance', { method:'POST', body: JSON.stringify({ mode, amount })});
+      alert('Balance: ' + res.balance);
+      await loadUsers();
+    }
+
+    async function loadLogs() {
+      const r = await api('/admin/logs');
+      const rows = r.items.map(l => \`
+        <tr class="border-b border-slate-800">
+          <td class="px-3 py-2">\${l.id}</td>
+          <td class="px-3 py-2">\${l.actor || ''}</td>
+          <td class="px-3 py-2">\${l.action}</td>
+          <td class="px-3 py-2">\${l.entity_type || ''}</td>
+          <td class="px-3 py-2">\${l.entity_id || ''}</td>
+          <td class="px-3 py-2 text-xs">\${l.created_at}</td>
+        </tr>\`);
+      document.getElementById('logsTable').innerHTML = table(['ID','Actor','Action','Entity','Entity ID','At'], rows);
+    }
+
+    document.getElementById('reloadW').onclick = loadWithdrawals;
+    function setExportLinks(token){
+      document.getElementById('exU').href = '/export/users.csv?token='+token;
+      document.getElementById('exW').href = '/export/withdrawals.csv?token='+token;
+      document.getElementById('exL').href = '/export/logs.csv?token='+token;
+    }
+
+    // periodic refresh
+    setInterval(async ()=>{
+      try{
+        await loadSummary();
+        await loadWithdrawals();
+        await loadUsers();
+      }catch(e){}
+    }, 10000); // every 10s
+
+    // hook toasts after actions
+    window.approve = async (id)=>{
+      const txid = document.getElementById('tx_'+id).value || null;
+      await api('/admin/withdrawals/'+id+'/approve', { method:'POST', body: JSON.stringify({ txid })});
+      showToast('Approved #' + id);
+      await loadWithdrawals();
+      await loadSummary();
+    };
+    window.deny = async (id)=>{
+      const note = prompt('Reason?') || 'Denied';
+      await api('/admin/withdrawals/'+id+'/deny', { method:'POST', body: JSON.stringify({ note })});
+      showToast('Denied #' + id + ' (refunded if pending)');
+      await loadWithdrawals();
+      await loadSummary();
+    };
+    window.setRole = async (uid)=>{
+      const role = document.getElementById('role_'+uid).value;
+      await api('/admin/users/'+uid+'/role', { method:'POST', body: JSON.stringify({ role })});
+      showToast('Role updated');
+      await loadUsers();
+    };
+    window.doBalance = async (uid)=>{
+      const amount = parseFloat(document.getElementById('amt_'+uid).value || '0');
+      const mode = document.getElementById('mode_'+uid).value;
+      const res = await api('/admin/users/'+uid+'/balance', { method:'POST', body: JSON.stringify({ mode, amount })});
+      showToast('Balance: ' + res.balance);
+      await loadUsers();
+    };
+
+
+    (async () => {
+      try {
+        await ensureAdmin(); setExportLinks(token);
+        await loadSummary();
+        await loadWithdrawals();
+        await loadUsers();
+        await loadLogs();
+      } catch (e) {
+        console.error(e);
+      }
+    })();
+  </script>
+
+  <div id="toast" class="toast"></div>
+  <script>
+    function showToast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2000);}
+  </script>
+</body>
+</html>
