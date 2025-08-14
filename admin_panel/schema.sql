@@ -1,6 +1,3 @@
--- TrustMe AI — schema.sql (idempotent-ish)
--- Requires Postgres 12+
-
 CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   tg_user_id BIGINT UNIQUE,

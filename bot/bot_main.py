@@ -1,24 +1,36 @@
 import os
 import logging
 import csv
-from datetime import datetime
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from .db import ensure_user, find_user, set_user_role, adjust_user_balance, update_withdrawal_status, log_action
+from .db import ensure_user, find_user, set_user_role, adjust_user_balance, update_withdrawal_status, log_action, migrate_schema
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("trustmeai.bot")
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-MODE = os.getenv("BOT_MODE", "polling").lower()
-PUBLIC_URL = os.getenv("PUBLIC_URL")
+
+# --- mode compatibility ---
+_raw_mode = os.getenv("BOT_MODE")
+if not _raw_mode:
+    _pm = os.getenv("POLLING_MODE")
+    if _pm and _pm.strip().lower() in ("1","true","yes","on"):
+        _raw_mode = "polling"
+    elif _pm and _pm.strip().lower() in ("0","false","no","off"):
+        _raw_mode = "webhook"
+    else:
+        _raw_mode = "polling"
+MODE = _raw_mode.lower()
+
+# compat: PUBLIC_URL or APP_BASE_URL
+PUBLIC_URL = os.getenv("PUBLIC_URL") or os.getenv("APP_BASE_URL")
 PORT = int(os.getenv("PORT", "8080"))
 APP_TOKEN_IN_PATH = int(os.getenv("APP_TOKEN_IN_PATH", "0")) == 1
 TRADES_PATH = os.getenv("TRADES_PATH", "trades.csv")
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH")  # optional override
 
-# Admin allowlist (Telegram numeric IDs). You can also gate by DB roles if you prefer.
 def _parse_admin_ids_env():
     raw = os.getenv("ADMIN_IDS", "").replace(";", ",").replace(" ", ",")
     ids = set()
@@ -31,13 +43,11 @@ def _parse_admin_ids_env():
         except ValueError:
             pass
     return ids
-
-ADMIN_IDS = _parse_admin_ids_env()  # e.g. ADMIN_IDS="123456789,987654321"
+ADMIN_IDS = _parse_admin_ids_env()
 
 def is_admin(user_id: int) -> bool:
     if user_id in ADMIN_IDS:
         return True
-    # Fallback: check DB role
     try:
         row = ensure_user(user_id)
         return row and row.get("role") in ("admin", "manager")
@@ -80,21 +90,14 @@ async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import html
     try:
         with open(TRADES_PATH, "r", encoding="utf-8") as f:
-            lines = f.readlines()[-16:]  # header + 15 rows
-        text = "".join(lines)
-        safe = html.escape(text)
+            lines = f.readlines()[-16:]
+        safe = html.escape("".join(lines))
         await update.message.reply_html(f"<pre><code>{safe}</code></pre>")
     except FileNotFoundError:
         await update.message.reply_text("No trades file found.")
 
 async def graph(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Graph endpoint pending — use admin panel for now.")
-
-async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u = update.effective_user
-    ensure_user(u.id, u.username, u.full_name)
-    handle = f"@{u.username}" if u.username else "—"
-    await update.message.reply_html(f"<b>ID:</b> {u.id}\n<b>Username:</b> {handle}\n<b>Name:</b> {u.full_name}")
 
 # --- Admin Commands ---
 
@@ -157,6 +160,22 @@ async def set_role_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     log_action(f"tg:{uid}", "role_set", "user", str(user['id']), {"before": before, "after": updated})
     await update.message.reply_text(f"Role set → {role}")
 
+async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    ensure_user(u.id, u.username, u.full_name)
+    handle = f"@{u.username}" if u.username else "—"
+    await update.message.reply_html(f"<b>ID:</b> {u.id}\n<b>Username:</b> {handle}\n<b>Name:</b> {u.full_name}")
+
+async def migrate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not is_admin(uid):
+        return await update.message.reply_text("Admins only.")
+    try:
+        migrate_schema()
+        await update.message.reply_text("Migration complete ✅")
+    except Exception as e:
+        await update.message.reply_text(f"Migration failed: {e}")
+
 def make_app() -> Application:
     if not TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
@@ -172,10 +191,12 @@ def make_app() -> Application:
     app.add_handler(CommandHandler("deny_withdraw", deny_withdraw))
     app.add_handler(CommandHandler("balance", balance_cmd))
     app.add_handler(CommandHandler("set_role", set_role_cmd))
-    # basic error handler
+    app.add_handler(CommandHandler("migrate", migrate_cmd))
+
     async def on_error(update, context):
         log.exception("Unhandled error", exc_info=context.error)
     app.add_error_handler(on_error)
+
     return app
 
 def main():
@@ -183,12 +204,16 @@ def main():
     if MODE == "webhook":
         if not PUBLIC_URL:
             raise RuntimeError("PUBLIC_URL required for webhook mode")
-        url_path = f"webhook/{TOKEN}" if APP_TOKEN_IN_PATH else "webhook"
+        if WEBHOOK_PATH:
+            url_path = WEBHOOK_PATH.lstrip("/")
+        else:
+            url_path = f"webhook/{TOKEN}" if APP_TOKEN_IN_PATH else "webhook"
+        webhook_url = f"{PUBLIC_URL.rstrip('/')}/{url_path}"
         app.run_webhook(
             listen="0.0.0.0",
-            port=int(os.getenv("PORT", "8080")),
+            port=PORT,
             url_path=url_path,
-            webhook_url=f"{PUBLIC_URL}/" + url_path,
+            webhook_url=webhook_url,
             drop_pending_updates=True
         )
     else:

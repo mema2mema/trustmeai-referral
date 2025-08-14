@@ -25,13 +25,12 @@ def db_cursor():
 
 def ensure_user(tg_user_id: int, username: str = None, full_name: str = None):
     with db_cursor() as cur:
-        cur.execute("""SELECT id, tg_user_id, username, full_name, role, balance FROM users WHERE tg_user_id=%s""", (tg_user_id,))
+        cur.execute("SELECT id, tg_user_id, username, full_name, role, balance FROM users WHERE tg_user_id=%s", (tg_user_id,))
         row = cur.fetchone()
         if row:
             return row
         cur.execute(
-            """INSERT INTO users (tg_user_id, username, full_name) VALUES (%s,%s,%s)
-                RETURNING id, tg_user_id, username, full_name, role, balance""",
+            "INSERT INTO users (tg_user_id, username, full_name) VALUES (%s,%s,%s) RETURNING id, tg_user_id, username, full_name, role, balance",
             (tg_user_id, username, full_name)
         )
         return cur.fetchone()
@@ -51,17 +50,16 @@ def update_withdrawal_status(withdrawal_id: int, status: str, actor: str, txid: 
                         SET status=%s, decided_at=NOW(), decided_by=%s, txid=COALESCE(%s, txid), note=COALESCE(%s, note)
                         WHERE id=%s
                         RETURNING *""", (status, actor, txid, note, withdrawal_id))
-        row = cur.fetchone()
-        return row
+        return cur.fetchone()
 
 def adjust_user_balance(user_id: int, mode: str, amount: float):
     with db_cursor() as cur:
         if mode == 'set':
-            cur.execute("""UPDATE users SET balance=%s WHERE id=%s RETURNING *""", (amount, user_id))
+            cur.execute("UPDATE users SET balance=%s WHERE id=%s RETURNING *", (amount, user_id))
         elif mode == 'add':
-            cur.execute("""UPDATE users SET balance=balance+%s WHERE id=%s RETURNING *""", (amount, user_id))
+            cur.execute("UPDATE users SET balance=balance+%s WHERE id=%s RETURNING *", (amount, user_id))
         elif mode == 'sub':
-            cur.execute("""UPDATE users SET balance=balance-%s WHERE id=%s RETURNING *""", (amount, user_id))
+            cur.execute("UPDATE users SET balance=balance-%s WHERE id=%s RETURNING *", (amount, user_id))
         else:
             raise ValueError("mode must be one of set|add|sub")
         return cur.fetchone()
@@ -69,15 +67,15 @@ def adjust_user_balance(user_id: int, mode: str, amount: float):
 def find_user(identifier: str):
     with db_cursor() as cur:
         if identifier.isdigit():
-            cur.execute("""SELECT * FROM users WHERE tg_user_id=%s""", (int(identifier),))
+            cur.execute("SELECT * FROM users WHERE tg_user_id=%s", (int(identifier),))
         else:
             handle = identifier.lstrip('@')
-            cur.execute("""SELECT * FROM users WHERE username ILIKE %s""", (handle,))
+            cur.execute("SELECT * FROM users WHERE username ILIKE %s", (handle,))
         return cur.fetchone()
 
 def set_user_role(user_id: int, role: str):
     with db_cursor() as cur:
-        cur.execute("""UPDATE users SET role=%s WHERE id=%s RETURNING *""", (role, user_id))
+        cur.execute("UPDATE users SET role=%s WHERE id=%s RETURNING *", (role, user_id))
         return cur.fetchone()
 
 def log_action(actor: str, action: str, entity_type: str = None, entity_id: str = None, meta: dict = None):
@@ -88,12 +86,12 @@ def log_action(actor: str, action: str, entity_type: str = None, entity_id: str 
 
 def get_audit_logs(limit: int = 200):
     with db_cursor() as cur:
-        cur.execute("""SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT %s""", (limit,))
+        cur.execute("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT %s", (limit,))
         return cur.fetchall()
 
 def list_users(limit: int = 200):
     with db_cursor() as cur:
-        cur.execute("""SELECT * FROM users ORDER BY created_at DESC LIMIT %s""", (limit,))
+        cur.execute("SELECT * FROM users ORDER BY created_at DESC LIMIT %s", (limit,))
         return cur.fetchall()
 
 def list_withdrawals(status: str = None, limit: int = 200):
@@ -107,3 +105,64 @@ def list_withdrawals(status: str = None, limit: int = 200):
                            FROM withdrawals w JOIN users u ON u.id=w.user_id
                            ORDER BY requested_at DESC LIMIT %s""", (limit,))
         return cur.fetchall()
+
+def migrate_schema():
+    sql = """
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='users' AND column_name='tg_user_id'
+  ) THEN
+    ALTER TABLE users ADD COLUMN tg_user_id BIGINT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='users' AND column_name='role'
+  ) THEN
+    ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='users' AND column_name='balance'
+  ) THEN
+    ALTER TABLE users ADD COLUMN balance NUMERIC(18,6) NOT NULL DEFAULT 0;
+  END IF;
+
+  BEGIN
+    ALTER TABLE users ADD CONSTRAINT users_tg_user_id_key UNIQUE (tg_user_id);
+  EXCEPTION WHEN duplicate_object THEN
+  END;
+END $$;
+
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id BIGSERIAL PRIMARY KEY,
+  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  amount NUMERIC(18,6) NOT NULL CHECK (amount > 0),
+  address TEXT NOT NULL,
+  network TEXT NOT NULL DEFAULT 'TRC20',
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','denied')),
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  decided_at TIMESTAMPTZ,
+  decided_by TEXT,
+  txid TEXT,
+  note TEXT
+);
+
+CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals(status);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id BIGSERIAL PRIMARY KEY,
+  actor TEXT,
+  action TEXT NOT NULL,
+  entity_type TEXT,
+  entity_id TEXT,
+  meta JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+"""
+    with db_cursor() as cur:
+        cur.execute(sql)
+    return True

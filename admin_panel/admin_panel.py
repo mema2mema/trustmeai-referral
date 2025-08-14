@@ -9,7 +9,7 @@ from db import (
 )
 
 st.set_page_config(page_title="TrustMe AI — Admin", page_icon="🛡️", layout="wide")
-st.title("🛡️ TrustMe AI — Admin Panel (v3.7.0)")
+st.title("🛡️ TrustMe AI — Admin Panel (v3.7.6)")
 
 ADMIN_PASSPHRASE = os.getenv("ADMIN_PASSPHRASE")
 
@@ -96,7 +96,6 @@ with tab3:
 with tab4:
     st.subheader("Audit Logs (latest 200)")
     logs = get_audit_logs(200)
-    import pandas as pd
     dfl = pd.DataFrame(logs)
     st.dataframe(dfl, use_container_width=True)
 
@@ -104,6 +103,5 @@ with tab5:
     st.subheader("All Withdrawals")
     status = st.selectbox("Filter status", ["", "pending","approved","denied"])
     rows = list_withdrawals(status or None, limit=500)
-    import pandas as pd
     dfw = pd.DataFrame(rows)
     st.dataframe(dfw, use_container_width=True)

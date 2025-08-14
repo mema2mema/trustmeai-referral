@@ -1,9 +1,7 @@
 try:
-    # When run as a package: python -m bot.main
-    from .bot_main import main
+    from .bot_main import main   # python -m bot.main
 except Exception:
-    # When run as a script: python bot/main.py
-    from bot_main import main
+    from bot_main import main    # python bot/main.py
 
 if __name__ == "__main__":
     main()
