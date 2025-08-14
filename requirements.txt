@@ -1,5 +1,5 @@
-python-telegram-bot==20.7
-aiohttp==3.9.5
+python-telegram-bot==21.5
+psycopg2-binary==2.9.9
+pandas==2.2.2
+streamlit==1.37.1
 python-dotenv==1.0.1
-SQLAlchemy==2.0.31
-psycopg[binary]==3.1.18
