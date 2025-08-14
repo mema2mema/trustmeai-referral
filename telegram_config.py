@@ -1,4 +1,4 @@
 {
-  "bot_token": "7702985344:AAHCuGl7KTfiC2P0jqtummEqAbbv3EtcLRo",
+  "bot_token": "8392953185:AAHRpvhfwEKzFEVdqGtep5NLLA_IDmWw1YE",
   "admin_chat_id": "7862868701"
 }
