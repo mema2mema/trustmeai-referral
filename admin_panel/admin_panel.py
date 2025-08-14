@@ -54,8 +54,13 @@ with tab1:
                     st.rerun()
                 if colB.button("⛔ Deny", key=f"deny_{row['id']}"):
                     updated = update_withdrawal_status(row['id'], "denied", st.session_state.admin_display, None, note or "Denied")
+                    try:
+                        if row.get('status') == 'pending':
+                            adjust_user_balance(row['user_id'], 'add', float(row['amount']))
+                    except Exception as e:
+                        st.warning(f"Auto-refund failed: {e}")
                     log_action(st.session_state.admin_display, "withdrawal_deny", "withdrawal", str(row['id']), {"before": row, "after": updated})
-                    st.warning(f"Denied withdrawal #{row['id']}")
+                    st.warning(f"Denied withdrawal #{row['id']} — refunded user balance")
                     st.rerun()
 
 with tab2:

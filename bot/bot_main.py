@@ -5,7 +5,7 @@ import csv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-from .db import ensure_user, find_user, set_user_role, adjust_user_balance, update_withdrawal_status, log_action, migrate_schema
+from .db import ensure_user, find_user, set_user_role, adjust_user_balance, update_withdrawal_status, log_action, migrate_schema, create_withdrawal, get_or_create_user, _get_user_pk_by_tg, get_withdrawal
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("trustmeai.bot")
@@ -99,6 +99,11 @@ async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def graph(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Graph endpoint pending — use admin panel for now.")
 
+async def my_balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    row = ensure_user(u.id, u.username, u.full_name)
+    await update.message.reply_html(f"Your balance: <b>{row['balance']}</b>")
+
 # --- Admin Commands ---
 
 async def approve_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -122,10 +127,20 @@ async def deny_withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("Usage: /deny_withdraw <withdrawal_id> [reason]")
     wid = int(context.args[0])
     note = " ".join(context.args[1:]) if len(context.args) > 1 else "Denied"
-    before = {"id": wid}
+
+    prev = get_withdrawal(wid)
+    if not prev:
+        return await update.message.reply_text("Withdrawal not found.")
     updated = update_withdrawal_status(wid, "denied", f"tg:{uid}", None, note)
-    log_action(f"tg:{uid}", "withdrawal_deny", "withdrawal", str(wid), {"before": before, "after": updated})
-    await update.message.reply_text(f"Denied withdrawal #{wid}")
+
+    # refund only if moving from pending -> denied
+    if prev.get("status") == "pending":
+        try:
+            adjust_user_balance(prev["user_id"], "add", float(prev["amount"]))
+        except Exception as e:
+            log.warning(f"Refund failed for withdrawal {wid}: {e}")
+    log_action(f"tg:{uid}", "withdrawal_deny", "withdrawal", str(wid), {"before": prev, "after": updated})
+    await update.message.reply_text(f"Denied withdrawal #{wid} and refunded balance.")
 
 async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
@@ -186,6 +201,8 @@ def make_app() -> Application:
     app.add_handler(CommandHandler("log", log_cmd))
     app.add_handler(CommandHandler("graph", graph))
     app.add_handler(CommandHandler("whoami", whoami))
+    app.add_handler(CommandHandler("balance", my_balance))
+    app.add_handler(CommandHandler("withdraw", withdraw_cmd))
 
     app.add_handler(CommandHandler("approve_withdraw", approve_withdraw))
     app.add_handler(CommandHandler("deny_withdraw", deny_withdraw))
@@ -221,3 +238,31 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+async def withdraw_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    row = ensure_user(u.id, u.username, u.full_name)
+    # Expected usage: /withdraw <amount> <address> [network]
+    if not context.args or len(context.args) < 2:
+        return await update.message.reply_text("Usage: /withdraw <amount> <address> [network]", disable_web_page_preview=True)
+    try:
+        amount = float(context.args[0])
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        return await update.message.reply_text("Amount must be a positive number. Example: /withdraw 100 TXabcdef... TRC20")
+    address = context.args[1]
+    network = context.args[2] if len(context.args) >= 3 else "TRC20"
+
+    # Check balance
+    if float(row["balance"]) < amount:
+        return await update.message.reply_text(f"Insufficient balance. You have {row['balance']}.")
+
+    # Debit balance and create withdrawal
+    before = row.copy()
+    updated = adjust_user_balance(row['id'], 'sub', amount)
+    wd = create_withdrawal(row['id'], amount, address, network)
+    log_action(f"tg:{u.id}", "withdraw_request", "withdrawal", str(wd['id']), {"before_balance": before, "after_balance": updated, "withdrawal": wd})
+    await update.message.reply_html(f"✅ Withdrawal request submitted.\nID: <b>{wd['id']}</b> • Amount: <b>{amount}</b> • Network: <b>{network}</b>")
+

@@ -297,3 +297,37 @@ def ensure_user(tg_user_id: int, username: str = None, full_name: str = None):
                 tuple(vals),
             )
             return cur.fetchone()
+
+
+def _get_user_pk_by_tg(cur, tg_user_id: int):
+    # prefer tg_user_id column; fallback to tg_id legacy
+    try:
+        cur.execute("SELECT id FROM users WHERE tg_user_id=%s", (tg_user_id,))
+        r = cur.fetchone()
+        if r: return r["id"]
+    except Exception:
+        cur.connection.rollback()
+        try:
+            cur.execute("SELECT id FROM users WHERE tg_id=%s", (tg_user_id,))
+            r = cur.fetchone()
+            if r: return r["id"]
+        except Exception:
+            cur.connection.rollback()
+    return None
+
+def get_or_create_user(tg_user_id: int, username: str = None, full_name: str = None):
+    row = ensure_user(tg_user_id, username, full_name)
+    return row
+
+def create_withdrawal(user_pk: int, amount: float, address: str, network: str = "TRC20"):
+    with db_cursor() as cur:
+        cur.execute(
+            "INSERT INTO withdrawals (user_id, amount, address, network) VALUES (%s,%s,%s,%s) RETURNING *",
+            (user_pk, amount, address, network),
+        )
+        return cur.fetchone()
+
+def get_withdrawal(withdrawal_id: int):
+    with db_cursor() as cur:
+        cur.execute("SELECT * FROM withdrawals WHERE id=%s", (withdrawal_id,))
+        return cur.fetchone()
