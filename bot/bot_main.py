@@ -19,7 +19,20 @@ APP_TOKEN_IN_PATH = int(os.getenv("APP_TOKEN_IN_PATH", "0")) == 1
 TRADES_PATH = os.getenv("TRADES_PATH", "trades.csv")
 
 # Admin allowlist (Telegram numeric IDs). You can also gate by DB roles if you prefer.
-ADMIN_IDS = set()  # e.g. {123456789, 987654321}
+def _parse_admin_ids_env():
+    raw = os.getenv("ADMIN_IDS", "").replace(";", ",").replace(" ", ",")
+    ids = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.add(int(part))
+        except ValueError:
+            pass
+    return ids
+
+ADMIN_IDS = _parse_admin_ids_env()  # e.g. ADMIN_IDS="123456789,987654321"
 
 def is_admin(user_id: int) -> bool:
     if user_id in ADMIN_IDS:
@@ -76,6 +89,12 @@ async def log_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def graph(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Graph endpoint pending — use admin panel for now.")
+
+async def whoami(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u = update.effective_user
+    ensure_user(u.id, u.username, u.full_name)
+    handle = f"@{u.username}" if u.username else "—"
+    await update.message.reply_html(f"<b>ID:</b> {u.id}\n<b>Username:</b> {handle}\n<b>Name:</b> {u.full_name}")
 
 # --- Admin Commands ---
 
@@ -147,11 +166,16 @@ def make_app() -> Application:
     app.add_handler(CommandHandler("summary", summary))
     app.add_handler(CommandHandler("log", log_cmd))
     app.add_handler(CommandHandler("graph", graph))
+    app.add_handler(CommandHandler("whoami", whoami))
 
     app.add_handler(CommandHandler("approve_withdraw", approve_withdraw))
     app.add_handler(CommandHandler("deny_withdraw", deny_withdraw))
     app.add_handler(CommandHandler("balance", balance_cmd))
     app.add_handler(CommandHandler("set_role", set_role_cmd))
+    # basic error handler
+    async def on_error(update, context):
+        log.exception("Unhandled error", exc_info=context.error)
+    app.add_error_handler(on_error)
     return app
 
 def main():

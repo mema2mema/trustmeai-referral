@@ -94,3 +94,18 @@ Upload the `web/` folder to Netlify. The contact form uses [Netlify Forms].
 - Roles are stored per user (`users.role`). Admin panel access is guarded by `ADMIN_PASSPHRASE`.
 - Every admin change writes to `audit_logs` with a helpful JSON snapshot.
 - The bot includes admin commands (`/approve_withdraw`, `/deny_withdraw`, `/balance`, `/set_role`) — restricted by a hardcoded allowlist you can widen in `bot_main.py` or by mapping Telegram users to role=admin in the DB.
+
+
+## 6) Admin IDs via env + /whoami
+
+Set `ADMIN_IDS` to a comma-separated list of Telegram numeric IDs to unlock admin commands, e.g.
+
+```
+ADMIN_IDS=123456789,987654321
+```
+
+To find your ID quickly, DM the bot:
+```
+/whoami
+```
+Then paste the number into `ADMIN_IDS` and redeploy (or restart).
