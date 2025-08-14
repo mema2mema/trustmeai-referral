@@ -109,12 +109,12 @@ def list_withdrawals(status: str = None, limit: int = 200):
 def migrate_schema():
     sql = """
 
+
 DO $$
 BEGIN
-  -- Create users table if absent
+  -- Ensure users table exists
   IF NOT EXISTS (
-    SELECT 1 FROM information_schema.tables
-    WHERE table_name='users'
+    SELECT 1 FROM information_schema.tables WHERE table_name='users'
   ) THEN
     CREATE TABLE users (
       id BIGSERIAL PRIMARY KEY,
@@ -125,53 +125,37 @@ BEGIN
       balance NUMERIC(18,6) NOT NULL DEFAULT 0,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
-  ELSE
-    -- Add missing columns
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name='users' AND column_name='tg_user_id'
-    ) THEN
-      ALTER TABLE users ADD COLUMN tg_user_id BIGINT;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name='users' AND column_name='username'
-    ) THEN
-      ALTER TABLE users ADD COLUMN username TEXT;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name='users' AND column_name='full_name'
-    ) THEN
-      ALTER TABLE users ADD COLUMN full_name TEXT;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name='users' AND column_name='role'
-    ) THEN
-      ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name='users' AND column_name='balance'
-    ) THEN
-      ALTER TABLE users ADD COLUMN balance NUMERIC(18,6) NOT NULL DEFAULT 0;
-    END IF;
-    IF NOT EXISTS (
-      SELECT 1 FROM information_schema.columns
-      WHERE table_name='users' AND column_name='created_at'
-    ) THEN
-      ALTER TABLE users ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-    END IF;
-    -- Safe unique constraint on tg_user_id
-    BEGIN
-      ALTER TABLE users ADD CONSTRAINT users_tg_user_id_key UNIQUE (tg_user_id);
-    EXCEPTION WHEN duplicate_object THEN
-    END;
+  END IF;
+
+  -- Columns
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='tg_user_id') THEN
+    ALTER TABLE users ADD COLUMN tg_user_id BIGINT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='username') THEN
+    ALTER TABLE users ADD COLUMN username TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='full_name') THEN
+    ALTER TABLE users ADD COLUMN full_name TEXT;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='role') THEN
+    ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='balance') THEN
+    ALTER TABLE users ADD COLUMN balance NUMERIC(18,6) NOT NULL DEFAULT 0;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='created_at') THEN
+    ALTER TABLE users ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+  END IF;
+
+  -- Unique constraint on tg_user_id (only if missing)
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'users_tg_user_id_key'
+  ) THEN
+    ALTER TABLE users ADD CONSTRAINT users_tg_user_id_key UNIQUE (tg_user_id);
   END IF;
 END $$;
 
--- Ensure withdrawals table exists
+-- Withdrawals
 CREATE TABLE IF NOT EXISTS withdrawals (
   id BIGSERIAL PRIMARY KEY,
   user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -187,7 +171,7 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 );
 CREATE INDEX IF NOT EXISTS withdrawals_status_idx ON withdrawals(status);
 
--- Ensure audit logs table exists
+-- Audit logs
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGSERIAL PRIMARY KEY,
   actor TEXT,

@@ -172,7 +172,7 @@ async def migrate_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("Admins only.")
     try:
         migrate_schema()
-        await update.message.reply_text("Migration complete ✅\nTry /start now.")
+        await update.message.reply_text("Migration complete ✅\nNow send /start and then /whoami.")
     except Exception as e:
         await update.message.reply_text(f"Migration failed: {e}")
 
